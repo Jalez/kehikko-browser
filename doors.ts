@@ -1,10 +1,11 @@
-import { KEHIKOT_DIR, doorContext } from 'kehikot-module-protocol'
+import { KEHIKOT_DIR } from 'kehikot-module-protocol'
 import { establishBuild, mintTicket, refuseTicket, type Reply } from 'kehikot-module-protocol/serve'
 
 import { ENGINE } from './browser/index.ts'
 import type { Engine } from './browser/engine.ts'
 import { editSaved, placeFor, recordPlace, savedList, type SavedOp } from './data.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
+import { resolveProject } from './project.ts'
 import { findSaved } from './src/lib/saved.ts'
 import { snippets } from './src/lib/endpoint.ts'
 
@@ -200,6 +201,10 @@ function said(state: { url: string; title: string; canBack: boolean; canForward:
   ].join('\n')
 }
 
+function withNote(content: Content[], note: string | null): Content[] {
+  return note ? [...content, { type: 'text', text: note }] : content
+}
+
 export async function call(name: string, args: Record<string, unknown>, engine: Engine = ENGINE): Promise<Content[]> {
   const text = (t: string): Content[] => [{ type: 'text', text: t }]
   switch (name) {
@@ -290,28 +295,34 @@ export async function call(name: string, args: Record<string, unknown>, engine: 
       )
     }
     case 'list_addresses': {
-      const read = savedList(doorContext(args).project)
+      const at = await resolveProject(args)
+      if (!at.ok) throw new Error(at.error)
+      const read = savedList(at.path)
       if (!read.ok) throw new Error(read.error)
-      if (read.value.length === 0) return text('Nothing is saved in this project yet.')
-      return text(read.value.map((one) => `${one.id}  ${one.name}  ${one.url}`).join('\n'))
+      if (read.value.length === 0) return withNote(text('Nothing is saved in this project yet.'), at.followed)
+      return withNote(text(read.value.map((one) => `${one.id}  ${one.name}  ${one.url}`).join('\n')), at.followed)
     }
     case 'save_address': {
       const given = str(args.url)
       const url = given ?? engine.state().url
       const title = given ? null : engine.state().title
-      const edit = editSaved(doorContext(args).project, { op: 'add', name: str(args.name) ?? null, url, title })
+      const at = await resolveProject(args)
+      if (!at.ok) throw new Error(at.error)
+      const edit = editSaved(at.path, { op: 'add', name: str(args.name) ?? null, url, title })
       if (!edit.ok) throw new Error(edit.error)
-      return text(`Saved "${edit.value.saved?.name}" → ${edit.value.saved?.url}`)
+      return withNote(text(`Saved "${edit.value.saved?.name}" → ${edit.value.saved?.url}`), at.followed)
     }
     case 'open_address': {
-      const read = savedList(doorContext(args).project)
+      const at = await resolveProject(args)
+      if (!at.ok) throw new Error(at.error)
+      const read = savedList(at.path)
       if (!read.ok) throw new Error(read.error)
       const wanted = str(args.name) ?? ''
       const which = findSaved(read.value, wanted)
       if (!which) {
         throw new Error(`Nothing is saved as "${wanted.slice(0, 80)}". Saved: ${read.value.map((s) => s.name).join(', ') || 'nothing'}.`)
       }
-      return text(said(await engine.navigate(which.url)))
+      return withNote(text(said(await engine.navigate(which.url))), at.followed)
     }
     default:
       throw new Error(`no tool "${name.slice(0, 60)}" here`)
@@ -380,8 +391,10 @@ export async function answer(
   }
 
   if (path === '/api/saved' && method === 'GET') {
-    const read = savedList(query.get('projectPath'))
-    return read.ok ? ok({ ok: true, list: read.value }) : bad(read.error)
+    const at = await resolveProject(query.get('projectPath'))
+    if (!at.ok) return bad(at.error)
+    const read = savedList(at.path)
+    return read.ok ? ok({ ok: true, list: read.value, path: at.path }) : bad(read.error)
   }
 
   if (path === '/api/saved' && method === 'POST') {
@@ -394,8 +407,10 @@ export async function answer(
     else if (body.op === 'remove') change = { op: 'remove', id: String(body.id ?? '') }
     else if (body.op === 'rename') change = { op: 'rename', id: String(body.id ?? ''), name: String(body.name ?? '') }
     else return bad('op is add, remove or rename')
-    const edit = editSaved(projectPath, change)
-    return edit.ok ? ok({ ok: true, ...edit.value }) : bad(edit.error)
+    const at = await resolveProject(projectPath)
+    if (!at.ok) return bad(at.error)
+    const edit = editSaved(at.path, change)
+    return edit.ok ? ok({ ok: true, ...edit.value, path: at.path }) : bad(edit.error)
   }
 
   if (path === '/api/place' && method === 'GET') {
@@ -405,7 +420,9 @@ export async function answer(
     } catch {
       return bad('keys is a JSON list')
     }
-    const read = placeFor(query.get('projectPath'), keys)
+    const at = await resolveProject(query.get('projectPath'))
+    if (!at.ok) return bad(at.error)
+    const read = placeFor(at.path, keys)
     return read.ok ? ok({ ok: true, visit: read.value }) : bad(read.error)
   }
 
@@ -413,7 +430,9 @@ export async function answer(
     const refused = refuseTicket(ticket, TICKET)
     if (refused) return refused
     if (!body) return bad('that was not a request')
-    const written = recordPlace(typeof body.projectPath === 'string' ? body.projectPath : null, body.keys, body.url, body.title)
+    const at = await resolveProject(typeof body.projectPath === 'string' ? body.projectPath : null)
+    if (!at.ok) return bad(at.error)
+    const written = recordPlace(at.path, body.keys, body.url, body.title)
     return written.ok ? ok({ ok: true }) : bad(written.error)
   }
 
