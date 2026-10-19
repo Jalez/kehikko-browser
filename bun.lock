@@ -13,9 +13,11 @@
         "clsx": "^2.1.1",
         "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v2.0.0",
         "lucide-react": "^1.33.0",
+        "playwright-core": "^1.64.1",
         "react": "^19.2.8",
         "react-dom": "^19.2.8",
         "tailwind-merge": "^3.6.0",
+        "ws": "^8.22.0",
         "zod": "^3.23.8",
       },
       "devDependencies": {
@@ -25,6 +27,7 @@
         "@types/bun": "latest",
         "@types/react": "^19.2.18",
         "@types/react-dom": "^19.2.5",
+        "@types/ws": "^8.18.2",
         "@vitejs/plugin-react": "^5.1.1",
         "tailwindcss": "^4.3.3",
         "typescript": "^5.7.0",
@@ -426,6 +429,8 @@
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
     "picomatch": ["picomatch@4.0.7", "", {}, "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA=="],
+
+    "playwright-core": ["playwright-core@1.64.1", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ=="],
 
     "postcss": ["postcss@8.5.31", "", { "dependencies": { "nanoid": "^3.3.20", "picocolors": "^1.1.1", "source-map-js": "^1.2.2" } }, "sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg=="],
 
