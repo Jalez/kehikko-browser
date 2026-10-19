@@ -1,75 +1,157 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
-import { Screen, headerItems } from '../src/app.tsx'
+import { Browser, headerItems } from '../src/app.tsx'
+import type { Saved } from '../src/lib/saved.ts'
 import type { Api } from '../src/wire/api.ts'
-import type { Host } from '../src/wire/use-kehikot.ts'
+import type { Stream, StreamEvents } from '../src/wire/stream.ts'
+import type { Host, Kept } from '../src/wire/use-kehikot.ts'
 
 afterEach(cleanup)
 
-function host(over: Partial<Host> = {}): Host {
+const saved: Saved[] = [{ id: 'sabc', name: 'Issues', url: 'https://github.com/Jalez/kehikko/issues', at: '' }]
+
+function fakeStream() {
+  const sent: Record<string, unknown>[] = []
+  let events: StreamEvents = {}
+  const make = (e: StreamEvents) => {
+    events = e
+    return {
+      start: () => events.open?.(true),
+      stop: () => {},
+      send: (m: Record<string, unknown>) => sent.push(m),
+      resize: () => {},
+    } as unknown as Stream
+  }
+  return { sent, make, events: () => events }
+}
+
+function fakeApi(over: Partial<Api> = {}): Api & { recorded: unknown[] } {
+  const recorded: unknown[] = []
   return {
-    where: 'hosted',
-    project: 'Thesis',
-    projectPath: '/work/thesis',
-    epic: 'write-chapter-two',
-    focus: [],
-    theme: 'dark',
-    request: () => Promise.resolve(null),
-    header: () => {},
+    recorded,
+    saved: () => Promise.resolve(saved),
+    save: () => Promise.resolve({ list: saved }),
+    remove: () => Promise.resolve([]),
+    rename: () => Promise.resolve(saved),
+    place: () => Promise.resolve(null),
+    record: (...args) => {
+      recorded.push(args)
+      return Promise.resolve()
+    },
+    endpoint: () => Promise.resolve({ endpoint: { http: 'http://127.0.0.1:8025', ws: null, port: 8025 }, snippets: null }),
     ...over,
   }
 }
 
-const fakeApi = (value: unknown): Api => ({ read: () => Promise.resolve(value), write: () => Promise.resolve() })
+function host(over: Partial<Host> = {}): Host & { said: unknown[][]; kept: Kept | null } {
+  const said: unknown[][] = []
+  return {
+    where: 'hosted',
+    project: 'Kehikko',
+    projectPath: '/work/kehikko',
+    epic: 'browser',
+    theme: 'light',
+    selection: [],
+    parts: [],
+    kehikko: { id: 1, name: 'Main', key: 'main' },
+    kept: null,
+    trackerAt: null,
+    request: (...args: unknown[]) => {
+      said.push(args)
+      return Promise.resolve({ rows: [{ ref: 'gh#41', url: 'https://github.com/Jalez/kehikko/pull/41' }], missing: [] })
+    },
+    remember: () => {},
+    header: () => {},
+    said,
+    ...over,
+  } as Host & { said: unknown[][]; kept: Kept | null }
+}
 
-describe('the screen', () => {
-  test('shows the project, epic and theme the host sent', () => {
-    render(<Screen host={host()} api={fakeApi(null)} />)
-    expect(screen.getByTestId('project').textContent).toBe('Thesis')
-    expect(screen.getByTestId('epic').textContent).toBe('write-chapter-two')
-    expect(screen.getByTestId('theme').textContent).toBe('dark')
-    expect(screen.getByTestId('where').textContent).toBe('hosted')
+describe('the header it declares', () => {
+  test('saved addresses are a Go item agents may press; follow is a toggle and a pinned button', () => {
+    const items = headerItems({ saved, follow: true, canSave: true })
+    const go = items.find((i) => i.id === 'saved')
+    expect(go).toMatchObject({ kind: 'go', agents: true, options: [{ id: 'sabc', label: 'Issues' }] })
+    expect(items.find((i) => i.id === 'follow')).toMatchObject({ kind: 'toggle', checked: true, agents: true })
+    expect(items.find((i) => i.id === 'pin')).toMatchObject({ kind: 'run', pinned: true, label: 'Stop following picks' })
+    expect(items.find((i) => i.id === 'save')).toMatchObject({ kind: 'run', agents: true, disabled: null })
+    expect(items.find((i) => i.id === 'endpoint')).toMatchObject({ tool: 'cdp_endpoint', agents: false })
   })
 
-  test('says which parts of the epic are picked out, and says so when none are', () => {
-    render(<Screen host={host()} api={fakeApi(null)} />)
-    expect(screen.getByTestId('parts').textContent).toBe('the whole epic')
-    cleanup()
-    render(<Screen host={host({ focus: ['The method', 'The results'] })} api={fakeApi(null)} />)
-    expect(screen.getByTestId('parts').textContent).toBe('The method, The results')
+  test('nothing saved, no Go item; nothing to save, the save is disabled with a reason', () => {
+    const items = headerItems({ saved: [], follow: false, canSave: false })
+    expect(items.some((i) => i.id === 'saved')).toBe(false)
+    expect(items.find((i) => i.id === 'pin')).toMatchObject({ label: 'Follow picks again' })
+    expect((items.find((i) => i.id === 'save') as { disabled: string | null }).disabled).toBeTruthy()
   })
+})
 
-  test('shows the value stored in the project', async () => {
-    render(<Screen host={host()} api={fakeApi('kept')} />)
-    await waitFor(() => expect((screen.getByLabelText(/a value kept/) as HTMLInputElement).value).toBe('kept'))
-  })
-
-  test('each not-ready state is the shared cover, and none offers to save nowhere', () => {
-    const none = { projectPath: null, project: null, epic: null }
-    for (const [where, state] of [['listening', 'waiting'], ['unhosted', 'unhosted'], ['hosted', 'no-project']] as const) {
-      const { container } = render(<Screen host={host({ ...none, where })} api={fakeApi(null)} />)
-      expect(container.querySelector('[data-cover]')?.getAttribute('data-cover')).toBe(state)
-      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
-      cleanup()
-    }
-  })
-
-  test('alone, the page draws its own header items; hosted, the host does', () => {
-    render(<Screen host={host({ where: 'unhosted' })} api={fakeApi(null)} />)
+describe('the page', () => {
+  test('draws an address bar and its own menus only when nobody frames it', () => {
+    const s = fakeStream()
+    render(<Browser host={host({ where: 'unhosted' })} api={fakeApi()} makeStream={s.make} />)
+    expect(screen.getByLabelText('Address')).toBeDefined()
     expect(screen.getByRole('button', { name: /View/ })).toBeDefined()
     cleanup()
-    render(<Screen host={host()} api={fakeApi(null)} />)
+    render(<Browser host={host()} api={fakeApi()} makeStream={s.make} />)
     expect(screen.queryByRole('button', { name: /View/ })).toBeNull()
   })
 
-  test('the toggle it declares decides whether what the host said is drawn', () => {
-    render(<Screen host={host()} api={fakeApi(null)} items={headerItems(false)} />)
-    expect(screen.queryByTestId('project')).toBeNull()
+  test('a Go press opens the saved address', async () => {
+    const s = fakeStream()
+    const pressRef = { current: (_: { item: string; value?: string | boolean }) => undefined as string | void }
+    render(<Browser host={host()} api={fakeApi()} makeStream={s.make} pressRef={pressRef} />)
+    await waitFor(() => expect(pressRef.current({ item: 'saved', value: 'sabc' })).toBeUndefined())
+    expect(s.sent).toContainEqual({ t: 'go', url: 'https://github.com/Jalez/kehikko/issues' })
   })
 
-  test('the header switcher shows the open item', () => {
-    render(<Screen host={host()} api={fakeApi(null)} />)
-    expect(screen.getByRole('button', { name: /First/ })).toBeDefined()
+  test('picking an issue on the canvas opens its page, from the host’s tracker reading', async () => {
+    const s = fakeStream()
+    const h = host()
+    const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    await act(async () => rerender(<Browser host={{ ...h, selection: ['gh#41'] }} api={fakeApi()} makeStream={s.make} />))
+    await waitFor(() => expect(s.sent).toContainEqual({ t: 'go', url: 'https://github.com/Jalez/kehikko/pull/41' }))
+    expect(h.said[0]).toEqual(['tracker.get', { refs: ['gh#41'] }])
+  })
+
+  test('with following stopped, a pick opens nothing', async () => {
+    const s = fakeStream()
+    const h = host({ kept: { follow: false } })
+    const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    await act(async () => rerender(<Browser host={{ ...h, selection: ['gh#41'] }} api={fakeApi()} makeStream={s.make} />))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(s.sent.some((m) => m.t === 'go')).toBe(false)
+  })
+
+  test('arriving at a place restores the address remembered there', async () => {
+    const s = fakeStream()
+    const asked: string[][] = []
+    const api = fakeApi({
+      place: (_p, keys) => {
+        asked.push(keys)
+        return Promise.resolve({ url: 'https://example.org/remembered', title: '', at: '', key: keys[1]! })
+      },
+    })
+    render(<Browser host={host({ parts: [{ id: 'p1', heading: 'One', refs: [], picked: true }] })} api={api} makeStream={s.make} />)
+    await waitFor(() => expect(s.sent).toContainEqual({ t: 'go', url: 'https://example.org/remembered' }))
+    expect(asked[0]).toEqual(['epic:browser/parts:p1/kehikko:main', 'epic:browser/parts:p1', 'epic:browser', 'project'])
+  })
+
+  test('a page shown after arrival is recorded at the place', async () => {
+    const s = fakeStream()
+    const api = fakeApi()
+    render(<Browser host={host()} api={api} makeStream={s.make} />)
+    await new Promise((r) => setTimeout(r, 10))
+    act(() => s.events().page?.({ url: 'https://github.com/x', title: 'X', canBack: false, canForward: false, loading: false }))
+    await waitFor(() => expect(api.recorded.length).toBe(1), { timeout: 3000 })
+    expect(api.recorded[0]).toEqual(['/work/kehikko', ['epic:browser/kehikko:main', 'epic:browser', 'project'], 'https://github.com/x', 'X'])
+  })
+
+  test('a failed start says why and offers to try again', () => {
+    const s = fakeStream()
+    render(<Browser host={host()} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().status?.({ state: 'failed', why: 'No Chromium to run.', endpoint: null }))
+    expect(screen.getByTestId('starting').textContent).toContain('No Chromium to run.')
   })
 })
