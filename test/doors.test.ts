@@ -77,13 +77,16 @@ describe('the MCP door', () => {
     expect(tools.map((t) => t.name)).toEqual([
       'navigate', 'current_url', 'back', 'forward', 'reload', 'read_page', 'find', 'click', 'type', 'key', 'scroll',
       'screenshot', 'wait_for', 'cdp_endpoint', 'list_addresses', 'save_address', 'open_address',
+      'highlight', 'console_log', 'network_failures', 'show_view', 'open_ref',
+      'walkthrough_start', 'walkthrough_step', 'walkthrough_end', 'repro_start', 'repro_step', 'repro_end',
+      'shots_begin', 'shot_capture', 'shots_status', 'shots_post_plan', 'shots_post_body', 'shots_posted',
     ])
     for (const t of tools) expect(typeof t.annotations?.readOnlyHint).toBe('boolean')
   })
 
   test('every tool that returns page content says it is untrusted', async () => {
     const tools = (await rpc('tools/list')).tools ?? []
-    for (const name of ['navigate', 'current_url', 'read_page', 'find', 'screenshot', 'open_address']) {
+    for (const name of ['navigate', 'current_url', 'read_page', 'find', 'screenshot', 'open_address', 'console_log', 'network_failures', 'open_ref', 'repro_step']) {
       expect(tools.find((t) => t.name === name)?.description).toMatch(/untrusted/i)
     }
   })
@@ -92,7 +95,7 @@ describe('the MCP door', () => {
     const tools = (await rpc('tools/list')).tools ?? []
     for (const t of tools) {
       expect(Object.keys(t.inputSchema.properties)).not.toContain('projectPath')
-      if (['list_addresses', 'save_address', 'open_address'].includes(t.name)) {
+      if (['list_addresses', 'save_address', 'open_address', 'open_ref'].includes(t.name) || /^(walkthrough|repro|shots?)_/.test(t.name)) {
         expect(Object.keys(t.inputSchema.properties)).toContain(DOOR_ARGUMENTS.project)
       }
     }

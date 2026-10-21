@@ -75,7 +75,7 @@ function fileFor(projectPath: string | null | undefined, name: DataFile, make: b
   return { ok: true, value: file }
 }
 
-function projectRoot(projectPath: string | null | undefined): Result<string> {
+export function projectRoot(projectPath: string | null | undefined): Result<string> {
   const raw = typeof projectPath === 'string' ? projectPath.trim() : ''
   if (!raw) return { ok: false, error: NO_PROJECT }
   if (!isAbsolute(raw)) return { ok: false, error: `"${raw}" is not an absolute path.` }
@@ -88,7 +88,7 @@ function projectRoot(projectPath: string | null | undefined): Result<string> {
   }
 }
 
-function escapesAny(root: string, paths: string[]): string | null {
+export function escapesAny(root: string, paths: string[]): string | null {
   for (const path of paths) {
     if (!existsSync(path)) continue
     const escaped = escapes(root, path)
@@ -97,7 +97,7 @@ function escapesAny(root: string, paths: string[]): string | null {
   return null
 }
 
-function escapes(root: string, child: string): string | null {
+export function escapes(root: string, child: string): string | null {
   let real: string
   try {
     real = realpathSync(child)

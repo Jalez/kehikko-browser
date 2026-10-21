@@ -2,13 +2,14 @@ import { resolve } from 'node:path'
 
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { doors, serves } from 'kehikot-module-protocol/serve'
+import { doors, originFor, serves } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
 import { ENGINE, bindPort } from './browser/index.ts'
 import { serveStream } from './browser/stream.ts'
-import { BUILD, MANIFEST, TICKET, answer } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer, servingAt } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
+import { isSkillPath } from './skills.ts'
 
 /**
  * The stream socket, beside the doors and on the one server that serves the
@@ -31,6 +32,8 @@ function stream(): Plugin {
         const address = http.address()
         const port = address && typeof address === 'object' ? address.port : PREFERRED_PORT
         bindPort(port)
+        /* The skills name the origin they reach this module at: the one it really bound. */
+        servingAt(originFor(port))
         serveStream(http as never, port, ENGINE, TICKET, (line) => server.config.logger.info(line))
       })
       http.once('close', () => void ENGINE.close())
@@ -42,7 +45,8 @@ function stream(): Plugin {
  * - `serves()` first: it claims the port from PREFERRED_PORT (or $PORT from a
  *   host) and keeps the registration true.
  * - `doors()` serves the manifest, `/app` with the write ticket printed into it,
- *   and `/healthz`, `/mcp` and `/api/*` through `answer` in doors.ts.
+ *   and `/healthz`, `/mcp`, `/api/*` and each skill's SKILL.md
+ *   (`/kehikot/skills/<name>.md`) through `answer` in doors.ts.
  * - `host: '127.0.0.1'` and `cors: false`: nothing off this machine reaches the
  *   page, the doors or the stream, and no other origin reads the ticket.
  */
@@ -51,7 +55,13 @@ export default defineConfig({
   plugins: [
     serves({ id: ID, prefer: PREFERRED_PORT }),
     stream(),
-    doors({ manifest: MANIFEST, answer, build: BUILD, page: { title: 'Browser', ticket: TICKET } }),
+    doors({
+      manifest: MANIFEST,
+      answer,
+      build: BUILD,
+      page: { title: 'Browser', ticket: TICKET },
+      ours: (path) => path === '/healthz' || path === '/mcp' || path.startsWith('/api/') || isSkillPath(path),
+    }),
     react(),
     tailwindcss(),
   ],

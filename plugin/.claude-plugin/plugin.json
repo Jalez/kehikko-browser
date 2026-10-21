@@ -1,0 +1,5 @@
+{
+  "name": "kehikot-browser",
+  "version": "0.1.0",
+  "description": "Kehikot Browser's skills (/browser-walkthrough, /browser-before-after, /browser-repro, /browser-open), filled in for the origin the module serves on and loaded for one session with --plugin-dir."
+}
