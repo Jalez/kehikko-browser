@@ -40,6 +40,19 @@ function fakeApi(over: Partial<Api> = {}): Api & { recorded: unknown[] } {
       return Promise.resolve()
     },
     endpoint: () => Promise.resolve({ endpoint: { http: 'http://127.0.0.1:8025', ws: null, port: 8025 }, snippets: null }),
+    console: () => Promise.resolve({ entries: [], dropped: 0, last: 0 }),
+    clearConsole: () => {
+      recorded.push('clear')
+      return Promise.resolve()
+    },
+    openDevtools: () => {
+      recorded.push('devtools')
+      return Promise.resolve('http://127.0.0.1:8025/devtools/inspector.html?ws=127.0.0.1:8025/devtools/page/ABC')
+    },
+    runs: () => Promise.resolve([]),
+    shotSets: () => Promise.resolve([]),
+    shotSet: () => Promise.reject(new Error('none')),
+    approveShots: () => Promise.reject(new Error('none')),
     ...over,
   }
 }

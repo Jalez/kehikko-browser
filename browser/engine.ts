@@ -8,6 +8,9 @@ import { chromium, type BrowserContext, type CDPSession, type Dialog, type Page 
 import { allowedUrl, BLANK, normaliseAddress } from '../src/lib/address.ts'
 import { keyEventParams, viewportFor, type KeyIn, type Size } from '../src/lib/input.ts'
 import { collect, describe, locate, type CollectArgs, type Snapshot } from './snapshot.ts'
+import { ConsoleBuffer, levelOf, requestSaid, sourceOf, sourceOfStack, type Entry, type Said } from './console.ts'
+import { clearHighlight, showHighlight, type Highlighted } from './highlight.ts'
+import { allowOriginsArg, DevtoolsWindow, devtoolsFrontend } from './devtools.ts'
 
 /**
  * One real Chromium, driven over CDP, shared by every container of this module
@@ -83,6 +86,23 @@ export interface Listener {
   page?(state: PageState): void
   status?(status: Status): void
   dialog?(dialog: { type: string; message: string; defaultValue: string } | null): void
+  /** One thing the page said (View › Console), as it is said. */
+  said?(entry: Entry): void
+  /** The console was cleared. */
+  cleared?(): void
+  /** An agent asked the person's page to show one of its views (`show_view`). */
+  show?(view: string, id: string | null): void
+}
+
+/** A page captured for a before/after shot: its own viewport and colour scheme, never the one the person sees. */
+export interface CaptureAsk {
+  url: string
+  width: number
+  height: number
+  theme: 'light' | 'dark'
+  fullPage?: boolean
+  /** How long to let the page settle after it loaded, in ms. */
+  settleMs?: number
 }
 
 export interface Endpoint {
@@ -92,6 +112,7 @@ export interface Endpoint {
 }
 
 const SLOT = `__kehikotRefs_${Math.random().toString(36).slice(2, 10)}`
+const HIGHLIGHT = `__kehikot_highlight_${Math.random().toString(36).slice(2, 10)}`
 const MAX_PAGES = 8
 
 /** A function to run in the page, with a no-op `__name` in case a transpiler kept names. */
@@ -115,6 +136,12 @@ export class Engine {
   private casting = false
   private lastState: PageState = { url: BLANK, title: '', canBack: false, canForward: false, loading: false }
   private pushTimer: ReturnType<typeof setTimeout> | null = null
+  /** What the pages said: View › Console, `console_log` and `network_failures` all read this one buffer. */
+  readonly console = new ConsoleBuffer()
+  /** Pages opened for a capture: never adopted, never in front, never streamed. */
+  private quiet = new Set<Page>()
+  private quietNext = false
+  private devtools: DevtoolsWindow | null = null
 
   constructor(
     private readonly modulePort: () => number,
@@ -168,7 +195,14 @@ export class Engine {
       chromiumSandbox: true,
       viewport: null,
       acceptDownloads: false,
-      args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', `--window-size=${this.size.width},${this.size.height}`],
+      /* `--remote-allow-origins` names the endpoint's OWN origin and nothing else: without it Chrome
+         refuses the DevTools frontend it serves itself (403 on the socket), measured on Chrome 155. */
+      args: [
+        `--remote-debugging-port=${port}`,
+        '--remote-debugging-address=127.0.0.1',
+        allowOriginsArg(port),
+        `--window-size=${this.size.width},${this.size.height}`,
+      ],
     }
     const tried: string[] = []
     let context: BrowserContext | null = null
@@ -201,7 +235,13 @@ export class Engine {
       .then((v) => v.webSocketDebuggerUrl ?? null)
       .catch(() => null)
 
-    context.on('page', (page) => this.adopt(page, true))
+    context.on('page', (page) => {
+      if (this.quietNext) {
+        this.quiet.add(page)
+        return
+      }
+      this.adopt(page, true)
+    })
     context.on('close', () => {
       this.context = null
       this.starting = null
@@ -219,6 +259,8 @@ export class Engine {
 
   /** Stop the browser. Called when this process stops; the profile stays on disk. */
   async close(): Promise<void> {
+    await this.devtools?.close()
+    this.devtools = null
     const context = this.context
     this.context = null
     this.starting = null
@@ -248,6 +290,22 @@ export class Engine {
     page.on('load', () => page === this.current && this.pushState())
     page.on('domcontentloaded', () => page === this.current && this.pushState())
     page.on('dialog', (dialog) => this.onDialog(page, dialog))
+    /* What the page says, for View › Console and the agent's console_log / network_failures. */
+    page.on('console', (message) => {
+      this.note({ kind: 'console', level: levelOf(message.type()), text: message.text(), source: sourceOf(message.location()), page: page.url() })
+    })
+    page.on('pageerror', (error) => {
+      this.note({ kind: 'exception', level: 'error', text: error.message || String(error), source: sourceOfStack(error.stack), page: page.url() })
+    })
+    page.on('requestfailed', (request) => {
+      const said = requestSaid({ url: request.url(), method: request.method(), status: 0, failure: request.failure()?.errorText ?? 'failed', page: page.url() })
+      if (said) this.note(said)
+    })
+    page.on('response', (response) => {
+      if (response.status() < 400) return
+      const said = requestSaid({ url: response.url(), method: response.request().method(), status: response.status(), page: page.url() })
+      if (said) this.note(said)
+    })
     page.on('close', () => {
       if (page !== this.current) return
       const rest = this.context?.pages().filter((p) => p !== page) ?? []
@@ -639,6 +697,117 @@ export class Engine {
       throw new Error(`Not within ${timeout} ms: ${message}`)
     }
     return 'It happened.'
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The console: what the pages said.
+   * ------------------------------------------------------------------ */
+
+  private note(said: Said): void {
+    const entry = this.console.add(said)
+    for (const one of this.listeners) one.said?.(entry)
+  }
+
+  /** Ask every page watching to show a view: the Console, a walkthrough, a before/after set. Answers how many pages were asked. */
+  show(view: string, id: string | null): number {
+    for (const one of this.listeners) one.show?.(view, id)
+    return this.listeners.size
+  }
+
+  clearConsole(): void {
+    this.console.clear()
+    for (const one of this.listeners) one.cleared?.()
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Showing the person what an agent is about to do.
+   * ------------------------------------------------------------------ */
+
+  /** Outline an element (a ref, a selector, or a point) with a label, for `ms`. */
+  async highlight(what: { ref?: string; selector?: string; x?: number; y?: number; label: string; ms?: number }): Promise<{ x: number; y: number; width: number; height: number }> {
+    const page = await this.page()
+    if (what.ref && !/^e\d{1,5}$/.test(what.ref)) throw new Error(`"${what.ref.slice(0, 20)}" is not a ref. Refs look like e12 and come from read_page or find.`)
+    const got = (await page.evaluate(
+      inPage(showHighlight, {
+        slot: SLOT,
+        id: HIGHLIGHT,
+        ref: what.ref ?? null,
+        selector: what.selector?.slice(0, 500) ?? null,
+        x: what.x ?? null,
+        y: what.y ?? null,
+        label: what.label,
+        ms: what.ms ?? 2500,
+      }),
+    )) as Highlighted
+    if ('why' in got) throw new Error(got.why)
+    return got
+  }
+
+  async unhighlight(): Promise<boolean> {
+    const page = await this.page()
+    return (await page.evaluate(inPage(clearHighlight, { id: HIGHLIGHT }))) as boolean
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Captures for before/after: a page of their own, out of sight.
+   * ------------------------------------------------------------------ */
+
+  async capture(ask: CaptureAsk): Promise<{ png: Buffer; url: string; title: string }> {
+    const address = normaliseAddress(ask.url)
+    if (!address.ok) throw new Error(address.why)
+    const context = await this.ready()
+    let page: Page
+    this.quietNext = true
+    try {
+      page = await context.newPage()
+    } finally {
+      this.quietNext = false
+    }
+    this.quiet.add(page)
+    try {
+      await page.setViewportSize({ width: ask.width, height: ask.height })
+      await page.emulateMedia({ colorScheme: ask.theme })
+      try {
+        await page.goto(address.url, { waitUntil: 'load', timeout: 30_000 })
+      } catch (error) {
+        const message = error instanceof Error ? error.message.split('\n')[0]! : String(error)
+        throw new Error(`Could not open ${address.url} for the capture: ${message}`)
+      }
+      /* Said again, on this page's own CDP session, just before the picture: a Playwright client
+         attached to the endpoint (connectOverCDP) applies its own default, `light`, to every new
+         page it sees, and that overrode `emulateMedia` — measured with one attached. */
+      const own = await context.newCDPSession(page)
+      await own.send('Emulation.setEmulatedMedia', { media: '', features: [{ name: 'prefers-color-scheme', value: ask.theme }] }).catch(() => {})
+      await own.detach().catch(() => {})
+      await page.waitForTimeout(Math.min(10_000, Math.max(0, ask.settleMs ?? 600)))
+      const png = await page.screenshot({ type: 'png', fullPage: ask.fullPage === true, timeout: 20_000 })
+      return { png, url: page.url(), title: await page.title().catch(() => '') }
+    } finally {
+      await page.close().catch(() => {})
+      this.quiet.delete(page)
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Chromium's own DevTools, for the page in front.
+   * ------------------------------------------------------------------ */
+
+  /** The DevTools frontend's address for the page in front, served by the endpoint itself on 127.0.0.1. */
+  async devtoolsUrl(): Promise<string> {
+    await this.page()
+    const at = this.endpoint()
+    const session = this.session
+    if (!at || !session) throw new Error('The browser is running without a DevTools endpoint.')
+    const info = (await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }
+    return devtoolsFrontend(at.port, info.targetInfo.targetId)
+  }
+
+  /** Open DevTools for the page in front in a window of its own (one at a time; a second press points it at the page in front now). */
+  async openDevtools(): Promise<string> {
+    const url = await this.devtoolsUrl()
+    if (!this.devtools) this.devtools = new DevtoolsWindow((line) => this.log(line), this.env)
+    await this.devtools.open(url)
+    return url
   }
 
   hasProfile(): boolean {

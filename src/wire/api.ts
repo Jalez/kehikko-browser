@@ -3,6 +3,9 @@ import { answered, ask } from 'kehikot-module-protocol/client'
 import type { Snippets } from '@/lib/endpoint'
 import type { Visit } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
+import type { Run, RunKind } from '@/lib/runs'
+import type { Pair, ShotSet } from '@/lib/shots'
+import type { ConsoleEntry } from '@/wire/stream'
 
 /**
  * This module's own `/api`, as the page calls it. `ask` carries the ticket on
@@ -21,6 +24,31 @@ export interface Api {
   place(projectPath: string, keys: string[]): Promise<(Visit & { key: string }) | null>
   record(projectPath: string, keys: string[], url: string, title: string): Promise<void>
   endpoint(): Promise<Endpoint>
+  console(): Promise<{ entries: ConsoleEntry[]; dropped: number; last: number }>
+  clearConsole(): Promise<void>
+  openDevtools(): Promise<string>
+  runs(projectPath: string, kind: RunKind): Promise<Run[]>
+  shotSets(projectPath: string): Promise<ShotSummary[]>
+  shotSet(projectPath: string, ref: string): Promise<{ set: ShotSet; pairs: Pair[]; missing: string[] }>
+  approveShots(projectPath: string, ref: string): Promise<ShotSet>
+}
+
+export interface ShotSummary {
+  slug: string
+  ref: string
+  title: string
+  createdAt: string
+  captured: number
+  approved: ShotSet['approved']
+  posted: ShotSet['posted']
+}
+
+/** A picture a record keeps, as the page loads it (a plain GET of this module's own origin). */
+export function runPng(projectPath: string, kind: RunKind, id: string, file: string): string {
+  return `./api/run/png?${new URLSearchParams({ projectPath, kind, id, file })}`
+}
+export function shotPng(projectPath: string, ref: string, file: string): string {
+  return `./api/shots/png?${new URLSearchParams({ projectPath, ref, file })}`
 }
 
 export const api: Api = {
@@ -49,5 +77,28 @@ export const api: Api = {
   async endpoint() {
     const got = answered(await ask<Endpoint>('./api/endpoint'))
     return { endpoint: got.endpoint ?? null, snippets: got.snippets ?? null }
+  },
+  async console() {
+    const got = answered(await ask<{ entries?: ConsoleEntry[]; dropped?: number; last?: number }>('./api/console'))
+    return { entries: got.entries ?? [], dropped: got.dropped ?? 0, last: got.last ?? 0 }
+  },
+  async clearConsole() {
+    answered(await ask('./api/console/clear', { body: {} }))
+  },
+  async openDevtools() {
+    return answered(await ask<{ url?: string }>('./api/devtools', { body: {} })).url ?? ''
+  },
+  async runs(projectPath, kind) {
+    return answered(await ask<{ runs?: Run[] }>('./api/runs', { query: { projectPath, kind } })).runs ?? []
+  },
+  async shotSets(projectPath) {
+    return answered(await ask<{ sets?: ShotSummary[] }>('./api/shots', { query: { projectPath } })).sets ?? []
+  },
+  async shotSet(projectPath, ref) {
+    const got = answered(await ask<{ set: ShotSet; pairs?: Pair[]; missing?: string[] }>('./api/shots/set', { query: { projectPath, ref } }))
+    return { set: got.set, pairs: got.pairs ?? [], missing: got.missing ?? [] }
+  },
+  async approveShots(projectPath, ref) {
+    return answered(await ask<{ set: ShotSet }>('./api/shots/approve', { body: { projectPath, ref } })).set
   },
 }

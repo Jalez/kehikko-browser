@@ -11,9 +11,11 @@ import { BLANK, labelFor, normaliseAddress } from '@/lib/address'
 import { urlForSelection, refsToAsk } from '@/lib/follow'
 import { placeKeys } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
+import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
 import { Viewer } from '@/view/viewer'
+import { Sheet } from '@/view/sheet'
 import { api as realApi, type Api, type Endpoint } from '@/wire/api'
-import { Stream, type Dialog, type PageState, type Status } from '@/wire/stream'
+import { Stream, type ConsoleEntry, type Dialog, type PageState, type Status } from '@/wire/stream'
 import { useKehikot, type Host } from '@/wire/use-kehikot'
 
 /**
@@ -26,9 +28,13 @@ import { useKehikot, type Host } from '@/wire/use-kehikot'
  * - View › Follow picked issues, and the pinned button that stops or resumes it.
  * - Run › Playwright endpoint…: the info view. An agent is sent to `cdp_endpoint`.
  * - Run › Edit saved addresses…: the page's list, to rename and remove.
+ * - View › Show: the page, the Console, the Walkthroughs, Before and after. Agents may press it
+ *   (show_view does the same from the MCP door).
+ * - Run › Open DevTools: Chromium's own DevTools for the page, in a window of its own. The
+ *   person's alone: it opens a window on their screen.
  */
-export function headerItems({ saved, follow, canSave }: { saved: readonly Saved[]; follow: boolean; canSave: boolean }): HeaderItem[] {
-  const items: unknown[] = []
+export function headerItems({ saved, follow, canSave, view = 'browser' }: { saved: readonly Saved[]; follow: boolean; canSave: boolean; view?: View }): HeaderItem[] {
+  const items: unknown[] = [{ kind: 'switch', id: 'view', label: 'Show', options: VIEWS.map((one) => ({ id: one.id, label: one.label })), value: view, agents: true }]
   if (saved.length) {
     items.push({
       kind: 'go',
@@ -58,6 +64,7 @@ export function headerItems({ saved, follow, canSave }: { saved: readonly Saved[
     },
     { kind: 'run', id: 'manage', label: 'Edit saved addresses…', icon: 'pencil', group: 'Addresses' },
     { kind: 'run', id: 'endpoint', label: 'Playwright endpoint…', icon: 'code', group: 'Playwright', tool: 'cdp_endpoint' },
+    { kind: 'run', id: 'devtools', label: 'Open DevTools', icon: 'external', group: 'Playwright' },
   )
   return headerItemsSchema.parse(items)
 }
@@ -91,6 +98,9 @@ export function Browser({
   const [said, setSaid] = useState<string | null>(null)
   const [saved, setSaved] = useState<Saved[]>([])
   const [panel, setPanel] = useState<Panel>(null)
+  const [view, setView] = useState<View>('browser')
+  const [focus, setFocus] = useState<string | null>(null)
+  const [lines, setLines] = useState<{ entries: ConsoleEntry[]; dropped: number }>({ entries: [], dropped: 0 })
   const frames = useRef<((frame: { data: string; width: number; height: number }) => void) | null>(null)
   const copied = useRef<((text: string) => void) | null>(null)
   const server = useServerStanding()
@@ -105,6 +115,14 @@ export function Browser({
         copied: (text) => copied.current?.(text),
         said: setSaid,
         open: setConnected,
+        console: (entry) => setLines((now) => ({ ...now, entries: appendEntry(now.entries, entry) })),
+        consoleCleared: () => setLines({ entries: [], dropped: 0 }),
+        show: (asked, id) => {
+          if (!VIEWS.some((one) => one.id === asked)) return
+          setPanel(null)
+          setView(asked as View)
+          setFocus(id)
+        },
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -113,6 +131,33 @@ export function Browser({
     stream.start({ width: 1280, height: 800, scale: window.devicePixelRatio || 1 })
     return () => stream.stop()
   }, [stream])
+
+  /* View › Console: what the server kept, then the live lines on top. */
+  useEffect(() => {
+    if (view !== 'console') return
+    let live = true
+    api
+      .console()
+      .then((read) => {
+        if (!live) return
+        setLines((now) => {
+          const newer = now.entries.filter((one) => one.n > read.last)
+          return { entries: [...read.entries, ...newer], dropped: read.dropped }
+        })
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [view, api])
+
+  const openDevtools = useCallback(() => {
+    setSaid('Opening DevTools in a window of its own…')
+    api.openDevtools().then(
+      () => setSaid('DevTools is open in its own window, for the page shown here.'),
+      (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+    )
+  }, [api])
 
   const go = useCallback(
     (typed: string) => {
@@ -273,14 +318,25 @@ export function Browser({
         setPanel('saved')
         return
       }
+      if (item === 'view') {
+        if (!VIEWS.some((one) => one.id === value)) return 'Say browser, console, walkthroughs or shots.'
+        setPanel(null)
+        setView(value as View)
+        setFocus(null)
+        return
+      }
+      if (item === 'devtools') {
+        openDevtools()
+        return
+      }
       return `Browser has nothing called "${item}" to press.`
     },
-    [follow, go, saveHere, saved, setFollow],
+    [follow, go, openDevtools, saveHere, saved, setFollow],
   )
   if (pressRef) pressRef.current = press
 
   const canSave = Boolean(projectPath) && /^https?:/.test(page.url)
-  const items = useMemo(() => headerItems({ saved, follow, canSave }), [saved, follow, canSave])
+  const items = useMemo(() => headerItems({ saved, follow, canSave, view }), [saved, follow, canSave, view])
   const { header } = host
   useEffect(() => header(items), [header, items])
 
@@ -305,6 +361,17 @@ export function Browser({
         <Viewer stream={stream} frames={frames} onCopied={copied} />
         {status.state !== 'ready' ? <Starting status={status} onRetry={() => stream.send({ t: 'retry' })} /> : null}
         {dialog ? <DialogBox dialog={dialog} onAnswer={(accept, text) => stream.send({ t: 'dialog', accept, text })} /> : null}
+        {view === 'console' ? (
+          <ConsoleView
+            entries={lines.entries}
+            dropped={lines.dropped}
+            onClear={() => void api.clearConsole().then(() => setLines({ entries: [], dropped: 0 }), (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)))}
+            onDevtools={openDevtools}
+            onClose={() => setView('browser')}
+          />
+        ) : null}
+        {view === 'walkthroughs' ? <RunsView api={api} projectPath={projectPath} focus={focus} onClose={() => setView('browser')} /> : null}
+        {view === 'shots' ? <ShotsView api={api} projectPath={projectPath} focus={focus} onClose={() => setView('browser')} /> : null}
         {panel === 'endpoint' ? <EndpointPanel api={api} onClose={() => setPanel(null)} /> : null}
         {panel === 'saved' ? (
           <SavedPanel
@@ -568,19 +635,5 @@ function SavedPanel({
         ))}
       </ul>
     </Sheet>
-  )
-}
-
-function Sheet({ title, onClose, children }: { title: string; onClose(): void; children: React.ReactNode }) {
-  return (
-    <div className="bg-background absolute inset-0 flex flex-col overflow-auto" role="dialog" aria-label={title}>
-      <div className="flex items-center border-b px-3 py-2">
-        <h2 className="text-sm font-medium">{title}</h2>
-        <Button variant="ghost" size="icon" className="ml-auto size-7" aria-label="Close" onClick={onClose}>
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="flex flex-col gap-3 p-3">{children}</div>
-    </div>
   )
 }
