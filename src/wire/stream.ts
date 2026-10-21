@@ -34,6 +34,23 @@ export interface StreamEvents {
   copied?(text: string): void
   said?(text: string): void
   open?(connected: boolean): void
+  /** One thing the page said, for View › Console. */
+  console?(entry: ConsoleEntry): void
+  consoleCleared?(): void
+  /** An agent asked for a view (`show_view`). */
+  show?(view: string, id: string | null): void
+}
+
+export interface ConsoleEntry {
+  n: number
+  at: string
+  kind: 'console' | 'exception' | 'network'
+  level: 'debug' | 'log' | 'info' | 'warn' | 'error'
+  text: string
+  source: string | null
+  page: string
+  status?: number
+  method?: string
 }
 
 export class Stream {
@@ -93,6 +110,15 @@ export class Stream {
           break
         case 'said':
           this.events.said?.(String(m.text ?? ''))
+          break
+        case 'console':
+          if (m.entry && typeof m.entry === 'object') this.events.console?.(m.entry as ConsoleEntry)
+          break
+        case 'console-clear':
+          this.events.consoleCleared?.()
+          break
+        case 'show':
+          this.events.show?.(String(m.view ?? ''), typeof m.id === 'string' ? m.id : null)
           break
       }
     }

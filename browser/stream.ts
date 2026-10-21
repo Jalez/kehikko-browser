@@ -71,6 +71,12 @@ export function serveStream(http: Server, port: number, engine: Engine, ticket: 
       page: (state) => send({ t: 'page', ...state }),
       status: (status) => send({ t: 'status', ...status, endpoint: engine.endpoint() }),
       dialog: (dialog) => send({ t: 'dialog', dialog }),
+      /* View › Console, live. Text only: the page shows it as text. A viewer far behind skips lines; it reads /api/console when it opens the view. */
+      said: (entry) => {
+        if (ws.bufferedAmount < 2_000_000) send({ t: 'console', entry })
+      },
+      cleared: () => send({ t: 'console-clear' }),
+      show: (view, id) => send({ t: 'show', view, id }),
     }
 
     ws.on('message', (raw) => {
