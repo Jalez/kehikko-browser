@@ -1,6 +1,6 @@
 {
   "name": "kehikko-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Browser, a module a kehikko host frames. An app: its own store, its own page, its own port.",
