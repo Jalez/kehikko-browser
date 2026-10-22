@@ -26,6 +26,10 @@ export const DECLARED: Manifest = manifestSchema.parse({
   protocol: PROTOCOL,
   id: ID,
   name: 'Browser',
+  /* The icon a host draws beside the name: a key of the protocol's module icons, never a path
+     or URL. The mark of the tool this module fronts, which identifies that tool and nothing
+     else; the same key Kehikot's official list gives it. */
+  icon: 'brand:googlechrome',
   version: VERSION,
   /* The format of what this module keeps under `.kehikot/`. Raise it only in
      the release that first writes data an older release cannot read; a host
