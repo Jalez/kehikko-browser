@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { chromium, type BrowserContext } from 'playwright-core'
+
+import { NO_SIGNAL_HANDLERS } from './signals.ts'
 
 /**
  * Chromium's own DevTools for the page the person sees, in a window of its own.
@@ -33,6 +35,96 @@ import { chromium, type BrowserContext } from 'playwright-core'
  */
 
 type Env = Record<string, string | undefined>
+
+/** What every DevTools window's throwaway profile is called, in the temporary folder: this module's, and nothing else's. */
+export const DEVTOOLS_PREFIX = 'kehikot-browser-devtools-'
+
+/** A leftover younger than this may be a window another copy of this module is opening right now. */
+const YOUNG_MS = 60_000
+
+/** The temporary folder the DevTools profiles are made in. */
+export function devtoolsTemp(env: Env = process.env): string {
+  return env.TMPDIR || tmpdir()
+}
+
+/** Whether a Chrome still holds a profile: its `SingletonLock` names `<host>-<pid>`, and that pid is alive. */
+function held(dir: string, alive: (pid: number) => boolean): boolean {
+  let lock: string
+  try {
+    lock = readlinkSync(join(dir, 'SingletonLock'))
+  } catch {
+    return false
+  }
+  const pid = Number(/-(\d+)$/.exec(lock)?.[1])
+  return Number.isInteger(pid) && pid > 0 && alive(pid)
+}
+
+/**
+ * Wait until Chrome has let go of a profile, for at most `within` ms. Chrome removes `SingletonLock`
+ * last as it quits, after Playwright's close has already resolved, and writes `Local State` before
+ * that: a folder removed sooner is written again, and left behind.
+ */
+export async function released(dir: string, within = 1000): Promise<void> {
+  const until = Date.now() + within
+  while (Date.now() < until) {
+    try {
+      lstatSync(join(dir, 'SingletonLock'))
+    } catch {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    /* EPERM: it exists, and is somebody else's. */
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Remove the DevTools profiles an earlier run left behind (a process that was killed before it could
+ * remove its own), once, when this module starts serving.
+ *
+ * Only folders this module makes (`DEVTOOLS_PREFIX`, real directories, never a link), and never one a
+ * live Chrome still holds or one made in the last minute: another copy of Browser on this machine
+ * (the person's own, on its own port) may have a DevTools window open, or be opening one. Says what it
+ * removed. Returns the folders removed.
+ */
+export function sweepDevtoolsProfiles(
+  log: (line: string) => void = () => {},
+  env: Env = process.env,
+  { now = Date.now(), alive = isAlive }: { now?: number; alive?: (pid: number) => boolean } = {},
+): string[] {
+  const temp = devtoolsTemp(env)
+  let names: string[]
+  try {
+    names = readdirSync(temp)
+  } catch {
+    return []
+  }
+  const removed: string[] = []
+  for (const name of names) {
+    if (!name.startsWith(DEVTOOLS_PREFIX)) continue
+    const dir = join(temp, name)
+    try {
+      const stat = lstatSync(dir)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue
+      if (now - stat.mtimeMs < YOUNG_MS) continue
+      if (held(dir, alive)) continue
+      rmSync(dir, { recursive: true, force: true })
+      removed.push(dir)
+    } catch {
+      /* Gone already, or not ours to read: leave it. */
+    }
+  }
+  if (removed.length) log(`browser: removed ${removed.length} DevTools profile(s) an earlier run left in ${temp}`)
+  return removed
+}
 
 /** The one origin the endpoint lets drive it from a page: its own. */
 export function allowOriginsArg(port: number): string {
@@ -72,9 +164,9 @@ export class DevtoolsWindow {
     }
     await this.close()
     /* A throwaway profile in the temporary folder: never the person's, never the module's. */
-    const dir = mkdtempSync(join(this.env.TMPDIR || tmpdir(), 'kehikot-browser-devtools-'))
+    const dir = mkdtempSync(join(devtoolsTemp(this.env), DEVTOOLS_PREFIX))
     this.dir = dir
-    const common = { headless: false, viewport: null, args: [`--app=${url}`, '--window-size=1100,760', '--no-first-run', '--no-default-browser-check'] }
+    const common = { headless: false, viewport: null, ...NO_SIGNAL_HANDLERS, args: [`--app=${url}`, '--window-size=1100,760', '--no-first-run', '--no-default-browser-check'] }
     let context: BrowserContext | null = null
     for (const channel of ['chrome', null] as const) {
       try {
@@ -91,7 +183,8 @@ export class DevtoolsWindow {
     this.context = context
     context.on('close', () => {
       if (this.context === context) this.context = null
-      this.forget()
+      /* Closed by the person, or by `close`: the profile goes once Chrome has let go of it. */
+      void released(dir).then(() => this.forgetDir(dir))
     })
     /* The window is the frontend and nothing else: closing its page closes it. */
     context.pages()[0]?.on('close', () => void context.close().catch(() => {}))
@@ -99,13 +192,30 @@ export class DevtoolsWindow {
 
   async close(): Promise<void> {
     const context = this.context
+    const dir = this.dir
     this.context = null
     if (context) await context.close().catch(() => {})
-    this.forget()
+    if (dir) {
+      await released(dir)
+      this.forgetDir(dir)
+    }
   }
 
-  private forget(): void {
-    if (this.dir) rmSync(this.dir, { recursive: true, force: true })
-    this.dir = null
+  /** Remove the window's profile now. Synchronous, so it can run on `exit` too, when nothing is awaited. */
+  forget(): void {
+    if (this.dir) this.forgetDir(this.dir)
+  }
+
+  /** Remove one profile this window made; a later window's is not touched. */
+  private forgetDir(dir: string): void {
+    if (this.dir === dir) this.dir = null
+    /* Never a throw: this runs from an event handler and on `exit`. A Chrome still writing its last
+       files makes a removal see a folder that is not empty (measured); it is tried again, and
+       whatever is left, the next start sweeps. */
+    try {
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    } catch (error) {
+      this.log(`browser: could not remove the DevTools profile ${dir} yet (${error instanceof Error ? error.message : String(error)}); the next start will.`)
+    }
   }
 }

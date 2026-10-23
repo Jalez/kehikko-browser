@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 import { doors, originFor, serves } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { ENGINE, bindPort } from './browser/index.ts'
+import { ENGINE, serving, stopEngine } from './browser/index.ts'
 import { serveStream } from './browser/stream.ts'
 import { BUILD, MANIFEST, TICKET, answer, ours, servingAt } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
@@ -30,12 +30,17 @@ function stream(): Plugin {
       http.once('listening', () => {
         const address = http.address()
         const port = address && typeof address === 'object' ? address.port : PREFERRED_PORT
-        bindPort(port)
+        serving(port)
         /* The skills name the origin they reach this module at: the one it really bound. */
         servingAt(originFor(port))
         serveStream(http as never, port, ENGINE, TICKET, (line) => server.config.logger.info(line))
       })
-      http.once('close', () => void ENGINE.close())
+      http.once('close', () => void stopEngine())
+    },
+    /* Awaited by `server.close()`, which Vite's own SIGTERM handler awaits before it exits: the
+       browser is closed (and writes its cookies) before the process goes. */
+    async closeBundle() {
+      await stopEngine()
     },
   }
 }

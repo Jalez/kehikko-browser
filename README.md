@@ -11,7 +11,8 @@ address; nothing here is Kehikot-specific).
   canvas); your pointer, wheel and keys go back (`Input.dispatch*`); it is
   resized to the container (`Emulation.setDeviceMetricsOverride`). Host
   overlays stack over it as over any page.
-- **Its own profile, kept.** Logins survive restarts. The profile is
+- **Its own profile, kept.** Logins survive restarts, even one made a moment
+  before Browser stopped (see "Stopping"). The profile is
   machine-level, in `~/Library/Application Support/Kehikot/browser-profile`
   (`$XDG_DATA_HOME/kehikot/browser-profile` elsewhere;
   `KEHIKOT_BROWSER_PROFILE` overrides it). It is never your own Chrome profile.
@@ -171,9 +172,7 @@ registry and profile:
   with 403, and a wrong ticket closes with 4003;
 - a download link is not downloaded (`acceptDownloads: false`) and DevTools
   opens its window, on both;
-- a login kept in the profile survives a restart on both. On either server a
-  stop kills Chrome rather than closing it, so a cookie set in the last moments
-  before a stop can be lost; that is as it was.
+- a login kept in the profile survives a restart on both (see "Stopping").
 
 Start, load and memory, Vite (0.3.0) against the built server, each started
 fresh five times in a scratch environment. Memory is the module server only
@@ -190,3 +189,43 @@ either way:
 
 playwright-core itself is about 125 ms and 78 MB of that under Bun (Bun alone is
 10 MB), which is why this module stays above the others that run ready-built.
+
+## Stopping
+
+A stop closes the browser rather than killing it. Chrome writes its cookies and
+site data when it is asked to quit, so a login made a moment before a stop is
+kept. `stopEngine` in `browser/index.ts` is that close: once, whoever asks, for
+at most `STOP_WITHIN_MS` (2 s). After it, the DevTools window's throwaway profile
+is removed, and nothing starts the browser again. The two servers both wait for it:
+
+- the built server hands it to the protocol's `run` as `onStop`, which waits for
+  it on SIGTERM and SIGINT (protocol 2.18.1, at most 2.5 s);
+- on Vite, the stream plugin's `closeBundle` waits for it, and Vite's own SIGTERM
+  handler waits for `server.close()`, which waits for `closeBundle`.
+
+Both caps are inside the host's grace: it SIGKILLs a module 5 s after SIGTERM
+on a normal stop, and 3 s after when the app quits. A close takes 33–69 ms.
+
+Playwright's own signal handlers are off (`browser/signals.ts`). They race that
+close and win, and the process then exits with Chrome half-way through writing:
+with them on, a cookie set 100 ms before a stop was lost every time.
+
+The DevTools window's profile is removed once Chrome has let go of it, which is
+when its `SingletonLock` is gone. Chrome writes `Local State` while it quits, so a
+folder removed sooner is written again. A removal that still finds files is
+retried, and never throws. When either server starts serving, it sweeps the
+`kehikot-browser-devtools-*` folders an earlier run left in the temporary folder.
+It skips any folder a live Chrome holds, or made in the last minute: another copy
+of Browser may have a window open.
+
+Checked from the host's side: each server was spawned in its own process group,
+sent SIGTERM to the group, and SIGKILLed after 3 s. Four cycles each, twice per
+server. Every cycle set a cookie and localStorage, waited 100 ms, stopped,
+restarted and read them back; one cycle per run had a DevTools window open.
+
+| | Vite dev | built (`serve.ts`) |
+|---|---|---|
+| cookie and localStorage set 100 ms before the stop, back after a restart | 8 of 8 | 8 of 8 |
+| SIGTERM → exit | 42–136 ms, code 0 | 39–118 ms, code 0 |
+| DevTools profiles left after a stop | none | none |
+| an hour-old leftover, at start | swept | swept |

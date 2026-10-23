@@ -11,6 +11,7 @@ import { collect, describe, locate, type CollectArgs, type Snapshot } from './sn
 import { ConsoleBuffer, levelOf, requestSaid, sourceOf, sourceOfStack, type Entry, type Said } from './console.ts'
 import { clearHighlight, showHighlight, type Highlighted } from './highlight.ts'
 import { allowOriginsArg, DevtoolsWindow, devtoolsFrontend } from './devtools.ts'
+import { NO_SIGNAL_HANDLERS } from './signals.ts'
 
 /**
  * One real Chromium, driven over CDP, shared by every container of this module
@@ -142,6 +143,8 @@ export class Engine {
   private quiet = new Set<Page>()
   private quietNext = false
   private devtools: DevtoolsWindow | null = null
+  /** Set by `end`: this process is stopping, and nothing starts the browser again. */
+  private ended = false
 
   constructor(
     private readonly modulePort: () => number,
@@ -164,6 +167,7 @@ export class Engine {
 
   /** The running browser, started on first use. Rejects with a sentence a person can act on. */
   async ready(): Promise<BrowserContext> {
+    if (this.ended) throw new Error('Browser is stopping.')
     if (this.context) return this.context
     if (!this.starting) {
       this.starting = this.launch().then(
@@ -193,6 +197,8 @@ export class Engine {
       headless,
       /* Playwright turns Chromium's sandbox off by default; this browser opens the open web, so it stays on. */
       chromiumSandbox: true,
+      /* This process closes the browser itself when it stops; see signals.ts. */
+      ...NO_SIGNAL_HANDLERS,
       viewport: null,
       acceptDownloads: false,
       /* `--remote-allow-origins` names the endpoint's OWN origin and nothing else: without it Chrome
@@ -257,14 +263,30 @@ export class Engine {
     return context
   }
 
-  /** Stop the browser. Called when this process stops; the profile stays on disk. */
+  /** Stop the browser; the profile stays on disk. */
   async close(): Promise<void> {
-    await this.devtools?.close()
-    this.devtools = null
-    const context = this.context
+    /* A browser still starting is closed once it is up, rather than left running behind the stop. */
+    const context = this.context ?? (this.starting ? await this.starting.catch(() => null) : null)
     this.context = null
     this.starting = null
-    if (context) await context.close().catch(() => {})
+    /* Both at once: a stop has to fit inside the host's grace. `context.close` asks Chrome to quit,
+       which is when it writes its cookies and storage to the profile. The DevTools window is kept
+       until it has closed (and removed its profile), so `forgetDevtools` on exit still finds it if a
+       stop is cut short. */
+    const devtools = this.devtools
+    await Promise.all([devtools?.close(), context?.close().catch(() => {})])
+    if (this.devtools === devtools) this.devtools = null
+  }
+
+  /** Stop for good, because this process is stopping: close the browser, and start nothing after. */
+  async end(): Promise<void> {
+    this.ended = true
+    await this.close()
+  }
+
+  /** Remove the DevTools window's throwaway profile now, without waiting: for an exit, when nothing can be awaited. */
+  forgetDevtools(): void {
+    this.devtools?.forget()
   }
 
   endpoint(): Endpoint | null {

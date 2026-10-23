@@ -24,3 +24,10 @@ playwright-core works as under Node; the stream socket is Bun's own WebSocket.
 Anything about what the module says lives in `doors.ts` and `browser/stream.ts`
 (`streamSession`), shared by both servers; `serve.ts` and `vite.config.ts` only
 mount them.
+
+## Stopping
+
+A stop closes Chrome (`stopEngine`, `browser/index.ts`) and both servers wait for
+it, within 2 s: `run`'s `onStop` and Vite's `closeBundle`. Keep any stop inside the
+host's 3 s quit grace. Keep Playwright's signal handlers off (`browser/signals.ts`)
+for every browser this module launches, or a stop kills Chrome mid-write again.

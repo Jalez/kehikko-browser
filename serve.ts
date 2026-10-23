@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { run } from 'kehikot-module-protocol/run'
 
-import { ENGINE, bindPort } from './browser/index.ts'
+import { ENGINE, serving, stopEngine } from './browser/index.ts'
 import { streamSockets } from './browser/stream.ts'
 import { BUILD, MANIFEST, TICKET, answer, ours, servingAt } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
@@ -35,11 +35,16 @@ const running = await run({
   ticket: TICKET,
   ours,
   sockets: stream.sockets,
-  onStop: stream.stopAll,
+  /* Awaited by `run` on a signal (protocol 2.18.1), within its cap: the viewers stop watching, then
+     the browser is closed, which is when Chrome writes its cookies and storage. */
+  onStop: () => {
+    stream.stopAll()
+    return stopEngine()
+  },
 })
 
 /* What `stream()` in vite.config.ts does once Vite is listening: the DevTools
-   endpoint sits relative to the port actually bound, and the skills name the
-   origin this process really serves on. */
-bindPort(running.port)
+   endpoint sits relative to the port actually bound, leftover DevTools profiles
+   are swept, and the skills name the origin this process really serves on. */
+serving(running.port)
 servingAt(running.origin)
