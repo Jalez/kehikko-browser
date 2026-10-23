@@ -51,6 +51,11 @@ address; nothing here is Kehikot-specific).
   its page opens (the URL comes from the host's shared tracker reading,
   `tracker.get`). View › Follow picked issues, and the pinned button in the
   container header, stop and resume that.
+- **Opens addresses handed to the canvas.** Another module's `address.open`
+  (protocol 2.16.0), or an agent's `open_address` at the host's door, puts a web
+  address in `context.address`; Browser says `reacts: ['address']`, so the host
+  knows it shows pages, and opens each address once (by its `at`, kept with
+  `state.set`), says who handed it over, and offers "Save address".
 - **Remembers the address per place.** The address shown is recorded at every
   level of project › epic › part › kehikko; arriving somewhere restores the
   most specific level that has one.

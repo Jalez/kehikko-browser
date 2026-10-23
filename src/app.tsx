@@ -9,6 +9,7 @@ import { HeaderMenus } from '@/components/header-menus'
 import { Input } from '@/components/ui/input'
 import { BLANK, labelFor, normaliseAddress } from '@/lib/address'
 import { urlForSelection, refsToAsk } from '@/lib/follow'
+import { addressToOpen, handedSaid, type Handed } from '@/lib/handed'
 import { placeKeys } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
 import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
@@ -96,6 +97,8 @@ export function Browser({
   const [connected, setConnected] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [said, setSaid] = useState<string | null>(null)
+  /* The last address another module handed over and this one opened, offered for saving. */
+  const [handed, setHanded] = useState<Handed | null>(null)
   const [saved, setSaved] = useState<Saved[]>([])
   const [panel, setPanel] = useState<Panel>(null)
   const [view, setView] = useState<View>('browser')
@@ -251,6 +254,9 @@ export function Browser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host.trackerAt])
 
+  /* Bumped when a handed-over address opens (below), so a place's remembered address that arrives later does not replace it. */
+  const opened = useRef(0)
+
   /* ---------------- The address remembered per place. ---------------- */
   const pickedIds = pickedParts(host.parts).map((part) => part.id)
   const keys = useMemo(
@@ -265,11 +271,13 @@ export function Browser({
     if (!placeId || !projectPath || !connected || host.where !== 'hosted') return
     let live = true
     arrived.current = null
+    const before = opened.current
     api
       .place(projectPath, keys)
       .then((visit) => {
         if (!live) return
-        if (visit && visit.url !== page.url) go(visit.url)
+        /* A handed-over address opened meanwhile is what was asked for now: the place's memory does not replace it. */
+        if (visit && visit.url !== page.url && opened.current === before) go(visit.url)
         arrived.current = placeId
       })
       .catch(() => {
@@ -287,6 +295,45 @@ export function Browser({
     const timer = setTimeout(() => void api.record(projectPath, keys, page.url, page.title).catch(() => {}), 1200)
     return () => clearTimeout(timer)
   }, [api, keys, page.title, page.url, placeId, projectPath])
+
+  /* ---------------- An address handed to the canvas (protocol 2.16.0). ---------------- */
+  /* Opened once per `at`: the host stamps a new one on every hand-over, and the last one acted on is
+     kept by the host for this module, so a reload does not open it again. After the place's effect, so
+     that one has counted `opened` before this bumps it. */
+  const actedAt = useRef<string | null>(null)
+  if (actedAt.current === null && host.kept?.addressAt) actedAt.current = host.kept.addressAt
+  const addressKey = host.address ? `${host.address.at ?? ''}|${host.address.url}` : ''
+  useEffect(() => {
+    if (host.where !== 'hosted' || !connected) return
+    const next = addressToOpen(host.address, actedAt.current)
+    if (!next) return
+    actedAt.current = next.at ?? next.url
+    if (next.at) host.remember({ ...(host.kept ?? {}), addressAt: next.at })
+    opened.current += 1
+    setPanel(null)
+    setView('browser')
+    if (go(next.url)) {
+      setHanded(next)
+      setSaid(handedSaid(next))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressKey, connected, host.where])
+
+  const saveHanded = useCallback(async () => {
+    if (!handed) return
+    if (!projectPath) {
+      setSaid('There is no project to save the address in.')
+      return
+    }
+    try {
+      const done = await api.save(projectPath, { url: handed.url, title: handed.title })
+      setSaved(done.list)
+      setHanded(null)
+      setSaid(done.saved ? `Saved as “${done.saved.name}”.` : 'Saved.')
+    } catch (error) {
+      setSaid(error instanceof Error ? error.message : String(error))
+    }
+  }, [api, handed, projectPath])
 
   /* ---------------- Presses, from the host's header and from this page. ---------------- */
   const press = useCallback(
@@ -352,7 +399,19 @@ export function Browser({
           <span className="min-w-0 flex-1 truncate" title={said}>
             {said}
           </span>
-          <button type="button" aria-label="dismiss" onClick={() => setSaid(null)}>
+          {handed && projectPath && said === handedSaid(handed) ? (
+            <button type="button" className="hover:text-foreground shrink-0 underline" data-testid="save-handed" onClick={() => void saveHanded()}>
+              Save address
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label="dismiss"
+            onClick={() => {
+              setSaid(null)
+              setHanded(null)
+            }}
+          >
             <X className="size-3" />
           </button>
         </p>

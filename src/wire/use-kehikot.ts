@@ -8,6 +8,8 @@ import { ID } from '../../manifest.ts'
 /** What the host keeps for one container of this module (`state.set`): whether it follows picks. */
 export interface Kept {
   follow?: boolean
+  /** The `at` of the last handed-over address this module opened (`context.address`), so a reload does not open it again. */
+  addressAt?: string
 }
 
 /**
@@ -18,7 +20,7 @@ export interface Kept {
 export interface Host
   extends Pick<
     ProtocolHost<Kept>,
-    'where' | 'project' | 'projectPath' | 'epic' | 'theme' | 'request' | 'header' | 'selection' | 'parts' | 'kehikko' | 'kept' | 'remember'
+    'where' | 'project' | 'projectPath' | 'epic' | 'theme' | 'request' | 'header' | 'selection' | 'parts' | 'kehikko' | 'kept' | 'remember' | 'address'
   > {
   /** When the host's tracker reading last changed (`context.tracker.at`); a pending ref is asked again when it moves. */
   trackerAt: string | null
