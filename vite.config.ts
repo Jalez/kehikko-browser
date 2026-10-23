@@ -7,9 +7,8 @@ import { defineConfig, type Plugin } from 'vite'
 
 import { ENGINE, bindPort } from './browser/index.ts'
 import { serveStream } from './browser/stream.ts'
-import { BUILD, MANIFEST, TICKET, answer, servingAt } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer, ours, servingAt } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
-import { isSkillPath } from './skills.ts'
 
 /**
  * The stream socket, beside the doors and on the one server that serves the
@@ -60,7 +59,7 @@ export default defineConfig({
       answer,
       build: BUILD,
       page: { title: 'Browser', ticket: TICKET },
-      ours: (path) => path === '/healthz' || path === '/mcp' || path.startsWith('/api/') || isSkillPath(path),
+      ours,
     }),
     react(),
     tailwindcss(),
