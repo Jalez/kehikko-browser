@@ -126,6 +126,67 @@ whoever called the MCP door on this machine.
 ./run.sh          # starts it; open http://127.0.0.1:8020/app
 bun test
 bun run typecheck
+bun run build     # the page, built and stamped with the commit (a host does this)
 ```
 
 `KEHIKOT_BROWSER_HEADLESS=0` shows the browser window, for debugging.
+
+## Served ready-built
+
+An installed copy is served from a page built ahead of time, by one Bun process
+(`serve.ts`, the protocol's `run`), whenever `dist/` carries a stamp of the commit
+checked out. Otherwise, as in a checkout somebody edits, `run.sh` runs Vite as
+before, and says why when there is a stamp of another commit. `bun run build`
+makes the build and the stamp; a host runs it when it installs or updates the
+module, so a start never builds. A stale build is never served: `serve.ts`
+answers the page and its files with a 503 that names both commits, while the
+doors keep answering.
+
+Both servers share the doors (`answer` and `ours` in `doors.ts`, mounted by
+`doors()` on Vite and by `run` on Bun) and the stream (`streamSession` in
+`browser/stream.ts`, on `ws` there and on Bun's WebSocket here). On Bun the
+handshake fence is the protocol's `socketFence`, the same rule as `fenced`; the
+ticket is still the first message. A frame waits for the last one to have left,
+which is `ws.send`'s callback on Vite and Bun's `drain` here.
+
+**playwright-core works under Bun** (Bun 1.4.0, playwright-core 1.64.1, Chrome
+155, macOS arm64), so nothing else changed. Checked against a local test page,
+the built server and Vite (Node) side by side, each with its own scratch home,
+registry and profile:
+
+- `launchPersistentContext` (the `chrome` channel), CDP sessions,
+  `connectOverCDP` from outside and the `cdp_endpoint` snippets;
+- every MCP tool, in one scripted run per server (navigate, read_page, find,
+  highlight, click, type, key, scroll, wait_for, screenshot, console_log,
+  network_failures, back/forward/reload, show_view, the saved addresses,
+  open_ref, walkthroughs, repros and before/after shots through to posting):
+  the same answers on both, apart from times, ids and the port;
+- the skills: each SKILL.md and its `!` line (`/api/skill/say`), and an OK to
+  post typed through `/browser-before-after post <ref>`;
+- the live view in a page, standalone and framed from another origin: frames
+  drawn, the address bar, Back, pointer, keys and wheel through the canvas,
+  console lines live; an animated page streams at 60 frames a second, about
+  9 MB/s, on both;
+- the fences: another origin, no origin and a rebound host name are refused
+  with 403, and a wrong ticket closes with 4003;
+- a download link is not downloaded (`acceptDownloads: false`) and DevTools
+  opens its window, on both;
+- a login kept in the profile survives a restart on both. On either server a
+  stop kills Chrome rather than closing it, so a cookie set in the last moments
+  before a stop can be lost; that is as it was.
+
+Start, load and memory, Vite (0.3.0) against the built server, each started
+fresh five times in a scratch environment. Memory is the module server only
+(node and esbuild, or bun), not the Chromium it drives, which is the same
+either way:
+
+| | Vite dev | built (`serve.ts`) |
+|---|---|---|
+| spawn → first 200 | 272–428 ms | **169–192 ms** |
+| page `load` | 276–345 ms, 45 requests | **38–53 ms, 3 requests** |
+| page opened → first frame | 618–683 ms | **358–416 ms** |
+| resident memory, started | 200–209 MB | **109–115 MB** |
+| resident memory, page open and browsing | 308–311 MB | **116–122 MB** |
+
+playwright-core itself is about 125 ms and 78 MB of that under Bun (Bun alone is
+10 MB), which is why this module stays above the others that run ready-built.

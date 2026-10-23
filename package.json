@@ -1,12 +1,13 @@
 {
   "name": "kehikko-browser",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Browser, a module a kehikko host frames. An app: its own store, its own page, its own port.",
   "scripts": {
     "dev": "vite",
-    "start": "vite",
+    "build": "bun run build.ts",
+    "start": "bun run serve.ts",
     "register": "bun run register.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
@@ -18,7 +19,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v2.16.0",
+    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v2.18.0",
     "lucide-react": "^1.33.0",
     "playwright-core": "^1.64.1",
     "react": "^19.2.8",

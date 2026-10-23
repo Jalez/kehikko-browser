@@ -10,7 +10,7 @@ import { editSaved, placeFor, recordPlace, savedList, type SavedOp } from './dat
 import { DECLARED, ID, VERSION } from './manifest.ts'
 import { resolveProject } from './project.ts'
 import { readRecordPng } from './records.ts'
-import { serveFrom, servedOrigin, skillAt, skillDeclarations } from './skills.ts'
+import { isSkillPath, serveFrom, servedOrigin, skillAt, skillDeclarations } from './skills.ts'
 import { findSaved } from './src/lib/saved.ts'
 import { snippets } from './src/lib/endpoint.ts'
 import { forgeUrl } from './src/lib/forge.ts'
@@ -53,6 +53,9 @@ export const BUILD = establishBuild({ version: VERSION, dir: import.meta.dirname
 
 /** The manifest as served: the one in manifest.ts with the skills this module offers, for the origin it is on. */
 export const MANIFEST: Manifest = manifestSchema.parse({ ...DECLARED, declares: { ...DECLARED.declares, skills: skillDeclarations() } })
+
+/** The paths `answer` takes, on both servers: the rest is the page and its files. */
+export const ours = (path: string): boolean => path === '/healthz' || path === '/mcp' || path.startsWith('/api/') || isSkillPath(path)
 
 /** Say the origin this process really serves on, once it is listening: the skills' text and version follow. */
 export function servingAt(origin: string): void {
