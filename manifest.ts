@@ -55,8 +55,10 @@ export const DECLARED: Manifest = manifestSchema.parse({
   },
   extensions: { emits: [], consumes: [] },
   /* selection: a picked issue or PR opens its page. tracker: a picked ref the host had not read yet
-     is asked again when the reading moves. parts: the address is remembered per part, and restored. */
-  reacts: ['selection', 'tracker', 'parts'],
+     is asked again when the reading moves. parts: the address is remembered per part, and restored.
+     address: a web address another module or an agent handed to the canvas opens here (protocol 2.16.0);
+     it is what tells the host this module shows pages. */
+  reacts: ['selection', 'tracker', 'parts', 'address'],
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
     /* trackers:read for `tracker.get` (a picked ref's page); state:keep for whether this container follows picks. */
