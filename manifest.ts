@@ -46,7 +46,10 @@ export const DECLARED: Manifest = manifestSchema.parse({
     + 'The skills /browser-walkthrough, /browser-before-after, /browser-repro and /browser-open keep records under .kehikot/browser/; '
     + 'before/after pictures reach a pull or merge request only after the person said OK, which no tool can say for them.',
   entry: '/app',
-  modes: [{ id: 'browser', label: 'Browser', scope: 'epic' }],
+  /* What its content belongs to (protocol 2.29.0): one mode per scope, the default first. */
+  modes: [
+    { id: 'browser', label: 'Browser', scope: 'part', scopeSays: 'the page you last had open for the picked parts of the open epic, on this kehikko' },
+  ],
   mcp: {
     url: '/mcp',
     transport: 'http',
