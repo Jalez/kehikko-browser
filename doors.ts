@@ -4,6 +4,7 @@ import { KEHIKOT_DIR, manifestSchema, type Manifest } from 'kehikot-module-proto
 import { establishBuild, mintTicket, refuseTicket, type Reply } from 'kehikot-module-protocol/serve'
 
 import { ENGINE } from './browser/index.ts'
+import { endpointNews, endpointStream } from './live.ts'
 import { describeEntries, KINDS, LEVELS, type Kind, type Level } from './browser/console.ts'
 import type { Engine } from './browser/engine.ts'
 import { editSaved, placeFor, recordPlace, savedList, type SavedOp } from './data.ts'
@@ -48,6 +49,9 @@ import {
  * no page to have been handed a ticket by.
  */
 export const TICKET = mintTicket()
+
+/** The page's stream door: the Playwright endpoint, told when the browser starts or stops (`live.ts`). */
+export const stream = endpointStream(ENGINE)
 
 export const BUILD = establishBuild({ version: VERSION, dir: import.meta.dirname })
 
@@ -894,10 +898,7 @@ export async function answer(
     return done.ok ? ok({ ok: true, set: done.value }) : bad(done.error)
   }
 
-  if (path === '/api/endpoint' && method === 'GET') {
-    const at = engine.endpoint()
-    return ok({ ok: true, endpoint: at, snippets: at ? snippets(at.http) : null, status: engine.getStatus() })
-  }
+  if (path === '/api/endpoint' && method === 'GET') return ok(endpointNews(engine))
 
   if (path === '/api/saved' && method === 'GET') {
     const at = await resolveProject(query.get('projectPath'))

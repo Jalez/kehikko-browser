@@ -1,4 +1,4 @@
-import { answered, ask } from 'kehikot-module-protocol/client'
+import { answered, ask, subscribe } from 'kehikot-module-protocol/client'
 
 import type { Snippets } from '@/lib/endpoint'
 import type { Visit } from '@/lib/places'
@@ -23,7 +23,12 @@ export interface Api {
   rename(projectPath: string, id: string, name: string): Promise<Saved[]>
   place(projectPath: string, keys: string[]): Promise<(Visit & { key: string }) | null>
   record(projectPath: string, keys: string[], url: string, title: string): Promise<void>
-  endpoint(): Promise<Endpoint>
+  /**
+   * Hear the Playwright endpoint: as it stands when the stream opens (and each time it reopens, after
+   * a drop or when the page is shown again), then each time the browser starts or stops. Never on a
+   * clock. Returns the function that stops it.
+   */
+  followEndpoint(onEndpoint: (endpoint: Endpoint) => void): () => void
   console(): Promise<{ entries: ConsoleEntry[]; dropped: number; last: number }>
   clearConsole(): Promise<void>
   openDevtools(): Promise<string>
@@ -74,10 +79,8 @@ export const api: Api = {
   async record(projectPath, keys, url, title) {
     answered(await ask('./api/place', { body: { projectPath, keys, url, title } }))
   },
-  async endpoint() {
-    const got = answered(await ask<Endpoint>('./api/endpoint'))
-    return { endpoint: got.endpoint ?? null, snippets: got.snippets ?? null }
-  },
+  followEndpoint: (onEndpoint) =>
+    subscribe<Partial<Endpoint>>('./api/endpoint/events', (got) => onEndpoint({ endpoint: got.endpoint ?? null, snippets: got.snippets ?? null }), { probe: true }),
   async console() {
     const got = answered(await ask<{ entries?: ConsoleEntry[]; dropped?: number; last?: number }>('./api/console'))
     return { entries: got.entries ?? [], dropped: got.dropped ?? 0, last: got.last ?? 0 }

@@ -589,24 +589,10 @@ function CopyLine({ label, text }: { label: string; text: string }) {
 
 function EndpointPanel({ api, onClose }: { api: Api; onClose(): void }) {
   const [got, setGot] = useState<Endpoint | null>(null)
-  const [why, setWhy] = useState<string | null>(null)
-  useEffect(() => {
-    let live = true
-    const read = () =>
-      api
-        .endpoint()
-        .then((e) => live && setGot(e))
-        .catch((error: unknown) => live && setWhy(error instanceof Error ? error.message : String(error)))
-    void read()
-    const timer = setInterval(read, 2000)
-    return () => {
-      live = false
-      clearInterval(timer)
-    }
-  }, [api])
+  /* Told as the panel opens and again when the browser starts or stops: the server's stream, never a clock. */
+  useEffect(() => api.followEndpoint(setGot), [api])
   return (
     <Sheet title="Playwright endpoint" onClose={onClose}>
-      {why ? <p className="text-sm">{why}</p> : null}
       {!got?.endpoint ? (
         <p className="text-muted-foreground text-sm">The endpoint opens once the browser has started.</p>
       ) : (

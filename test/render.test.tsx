@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { Browser, headerItems } from '../src/app.tsx'
 import type { Saved } from '../src/lib/saved.ts'
-import type { Api } from '../src/wire/api.ts'
+import type { Api, Endpoint } from '../src/wire/api.ts'
 import type { Stream, StreamEvents } from '../src/wire/stream.ts'
 import type { Host, Kept } from '../src/wire/use-kehikot.ts'
 
@@ -39,7 +39,7 @@ function fakeApi(over: Partial<Api> = {}): Api & { recorded: unknown[] } {
       recorded.push(args)
       return Promise.resolve()
     },
-    endpoint: () => Promise.resolve({ endpoint: { http: 'http://127.0.0.1:8025', ws: null, port: 8025 }, snippets: null }),
+    followEndpoint: (on) => (on({ endpoint: { http: 'http://127.0.0.1:8025', ws: null, port: 8025 }, snippets: null }), () => {}),
     console: () => Promise.resolve({ entries: [], dropped: 0, last: 0 }),
     clearConsole: () => {
       recorded.push('clear')
@@ -215,5 +215,42 @@ describe('the page', () => {
     render(<Browser host={host()} api={fakeApi()} makeStream={s.make} />)
     act(() => s.events().status?.({ state: 'failed', why: 'No Chromium to run.', endpoint: null }))
     expect(screen.getByTestId('starting').textContent).toContain('No Chromium to run.')
+  })
+})
+
+describe('the Playwright endpoint panel: told, never asks on a clock', () => {
+  test('open, it follows one stream, sets no timer, and shows the endpoint once the browser has started', async () => {
+    const followers: ((endpoint: Endpoint) => void)[] = []
+    let stopped = 0
+    const api = fakeApi({
+      /* As the stream does: the endpoint as it stands at once, then each start or stop the test sends. */
+      followEndpoint: (on) => {
+        followers.push(on)
+        on({ endpoint: null, snippets: null })
+        return () => void stopped++
+      },
+    })
+    const realInterval = globalThis.setInterval
+    let intervals = 0
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => (intervals++, realInterval(...args))) as typeof setInterval
+    try {
+      const s = fakeStream()
+      const pressRef = { current: (_: { item: string; value?: string | boolean }) => undefined as string | void }
+      render(<Browser host={host()} api={api} makeStream={s.make} pressRef={pressRef} />)
+      await act(async () => void pressRef.current({ item: 'endpoint' }))
+      /* Counted before `waitFor`, which keeps an interval of its own. */
+      expect(intervals).toBe(0)
+      expect(followers.length).toBe(1)
+      expect(screen.getByText(/The endpoint opens once the browser has started/)).toBeDefined()
+      /* The browser starts (an agent's cdp_endpoint, say): the server publishes the endpoint. */
+      await act(async () => followers[0]!({ endpoint: { http: 'http://127.0.0.1:8031', ws: null, port: 8031 }, snippets: null }))
+      expect(screen.getByTestId('endpoint').textContent).toContain('http://127.0.0.1:8031')
+      expect(intervals).toBe(0)
+      expect(followers.length).toBe(1)
+      cleanup()
+      expect(stopped).toBe(1)
+    } finally {
+      globalThis.setInterval = realInterval
+    }
   })
 })
