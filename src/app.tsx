@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { BLANK, labelFor, normaliseAddress } from '@/lib/address'
 import { urlForSelection, refsToAsk } from '@/lib/follow'
 import { addressToOpen, handedSaid, type Handed } from '@/lib/handed'
+import { addressShown, alreadyOpening, committed, openingSaid, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
 import { placeKeys } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
 import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
@@ -75,6 +76,9 @@ type Panel = 'endpoint' | 'saved' | null
 
 const NO_PAGE: PageState = { url: BLANK, title: '', canBack: false, canForward: false, loading: false }
 
+/** How long "Opening …" is shown at most: the engine gives up on a navigation after 30 s. */
+export const OPENING_AT_MOST = 30_000
+
 export function App() {
   const pressRef = useRef<(press: Press) => string | void>(() => 'Not ready yet.')
   const host = useKehikot({ onPress: (press) => pressRef.current(press) })
@@ -107,16 +111,39 @@ export function Browser({
   const frames = useRef<((frame: { data: string; width: number; height: number }) => void) | null>(null)
   const copied = useRef<((text: string) => void) | null>(null)
   const server = useServerStanding()
+  /* What is being opened, from the moment it is asked until the new page's first frame (see `opening.ts`). */
+  const [opening, setOpeningState] = useState<Opening | null>(null)
+  const openingRef = useRef<Opening | null>(null)
+  const setOpening = useCallback((next: Opening | null) => {
+    openingRef.current = next
+    setOpeningState(next)
+  }, [])
+  const pageRef = useRef<PageState>(NO_PAGE)
 
   const stream = useMemo(
     () =>
       makeStream({
-        frame: (frame) => frames.current?.(frame),
-        page: setPage,
+        frame: (frame) => {
+          frames.current?.(frame)
+          if (openingRef.current && painted(openingRef.current)) setOpening(null)
+        },
+        page: (state) => {
+          pageRef.current = state
+          setPage(state)
+          const now = openingRef.current
+          if (now) {
+            const next = committed(now, state.url)
+            if (next !== now) setOpening(next)
+          }
+        },
         status: setStatus,
         dialog: setDialog,
         copied: (text) => copied.current?.(text),
-        said: setSaid,
+        said: (text) => {
+          /* The server says something only when a press failed: a navigation that did not happen ends "Opening". */
+          if (openingRef.current) setOpening(null)
+          setSaid(text)
+        },
         open: setConnected,
         console: (entry) => setLines((now) => ({ ...now, entries: appendEntry(now.entries, entry) })),
         consoleCleared: () => setLines({ entries: [], dropped: 0 }),
@@ -162,18 +189,35 @@ export function Browser({
     )
   }, [api])
 
+  /* Never shown longer than the engine would try. */
+  useEffect(() => {
+    if (!opening) return
+    const timer = setTimeout(() => openingRef.current === opening && setOpening(null), OPENING_AT_MOST)
+    return () => clearTimeout(timer)
+  }, [opening, setOpening])
+
+  /**
+   * Open an address. `from` says who asked: a pick does not send a second
+   * navigation to an address already being opened, and a hand-over does not
+   * send one to an address a pick is already opening (References hands over
+   * the address AND picks the ref with one click). The address bar shows it at
+   * once; the engine's committed address replaces it, redirect included.
+   */
   const go = useCallback(
-    (typed: string) => {
+    (typed: string, how: { from?: Opening['from']; label?: string } = {}) => {
       const address = normaliseAddress(typed)
       if (!address.ok) {
         setSaid(address.why)
         return false
       }
+      const from = how.from ?? 'typed'
+      if (alreadyOpening(openingRef.current, address.url, from)) return true
       setSaid(null)
+      setOpening(startOpening(openingRef.current, { url: address.url, label: how.label ?? null, from, before: pageRef.current.url }))
       stream.send({ t: 'go', url: address.url })
       return true
     },
-    [stream],
+    [setOpening, stream],
   )
 
   /* ---------------- Saved addresses, per project. ---------------- */
@@ -211,30 +255,43 @@ export function Browser({
   const selection = host.selection.join(' ')
   const lastSelection = useRef<string | null>(null)
   const waiting = useRef<string | null>(null)
+  /* A pick made while the stream was down, opened when it comes up if it is still the selection. */
+  const unopened = useRef<string | null>(null)
+  /* Bumped when a handed-over address or a pick opens, so a place's remembered address that arrives later does not replace it. */
+  const opened = useRef(0)
   const { request } = host
 
   const openSelection = useCallback(async () => {
     const picked = selection ? selection.split(' ') : []
     const refs = refsToAsk(picked)
     if (!refs.length) return
+    /* Said at once, before the host is asked: the address follows when the reading names it. */
+    setOpening(pickedOpening(openingRef.current, refs[0]!, pageRef.current.url))
     let reading: { rows?: unknown; missing?: unknown } | null = null
     try {
       reading = (await request('tracker.get', { refs })) as typeof reading
     } catch {
       reading = null
     }
+    /* Picked again meanwhile: that pick's own lookup opens it. */
+    if (lastSelection.current !== selection) return
     const found = urlForSelection(picked, reading)
     if (found.kind === 'open') {
       waiting.current = null
-      if (found.url !== page.url) go(found.url)
-    } else if (found.kind === 'pending') {
-      waiting.current = selection
-      setSaid(`Waiting for the host to read ${found.refs.join(', ')}…`)
+      opened.current += 1
+      if (found.url !== pageRef.current.url) go(found.url, { from: 'pick', label: found.ref })
+      else if (openingRef.current && !openingRef.current.url) setOpening(null)
     } else {
-      waiting.current = null
-      setSaid(found.why)
+      if (openingRef.current && !openingRef.current.url) setOpening(null)
+      if (found.kind === 'pending') {
+        waiting.current = selection
+        setSaid(`Waiting for the host to read ${found.refs.join(', ')}…`)
+      } else {
+        waiting.current = null
+        setSaid(found.why)
+      }
     }
-  }, [go, page.url, request, selection])
+  }, [go, request, selection, setOpening])
 
   useEffect(() => {
     if (host.where !== 'hosted') return
@@ -245,17 +302,26 @@ export function Browser({
     }
     if (selection === lastSelection.current) return
     lastSelection.current = selection
-    if (follow && connected) void openSelection()
+    if (!follow) return
+    if (connected) {
+      unopened.current = null
+      void openSelection()
+    } else unopened.current = selection
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection, host.where])
+
+  useEffect(() => {
+    if (!connected || unopened.current === null) return
+    const pick = unopened.current
+    unopened.current = null
+    if (pick === selection && follow) void openSelection()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
 
   useEffect(() => {
     if (waiting.current && waiting.current === selection && follow) void openSelection()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host.trackerAt])
-
-  /* Bumped when a handed-over address opens (below), so a place's remembered address that arrives later does not replace it. */
-  const opened = useRef(0)
 
   /* ---------------- The address remembered per place. ---------------- */
   const pickedIds = pickedParts(host.parts).map((part) => part.id)
@@ -312,7 +378,7 @@ export function Browser({
     opened.current += 1
     setPanel(null)
     setView('browser')
-    if (go(next.url)) {
+    if (go(next.url, { from: 'handed' })) {
       setHanded(next)
       setSaid(handedSaid(next))
     }
@@ -391,9 +457,23 @@ export function Browser({
 
   return (
     <div className="flex h-screen flex-col text-sm">
-      <Bar page={page} stream={stream} onGo={go} onSave={() => void saveHere().then((why) => why && setSaid(why))} canSave={canSave} onPanel={setPanel}>
+      <Bar
+        page={page}
+        shownUrl={addressShown(opening, page.url)}
+        stream={stream}
+        onGo={go}
+        onSave={() => void saveHere().then((why) => why && setSaid(why))}
+        canSave={canSave}
+        onPanel={setPanel}
+      >
         {host.where === 'unhosted' ? <HeaderMenus items={items} onPress={press} /> : null}
       </Bar>
+      {opening ? (
+        <div className="relative shrink-0 border-b px-2 py-0.5 text-xs" role="status" data-testid="opening">
+          <span className="bg-primary/60 absolute inset-x-0 top-0 h-0.5 animate-pulse" aria-hidden="true" />
+          <span className="text-muted-foreground block truncate">{openingSaid(opening)}</span>
+        </div>
+      ) : null}
       {said ? (
         <p className="text-muted-foreground flex items-center gap-2 border-b px-2 py-1 text-xs" data-testid="said">
           <span className="min-w-0 flex-1 truncate" title={said}>
@@ -452,6 +532,7 @@ export function Browser({
 
 function Bar({
   page,
+  shownUrl,
   stream,
   onGo,
   onSave,
@@ -460,6 +541,8 @@ function Bar({
   children,
 }: {
   page: PageState
+  /** What the address bar says when nobody is typing: what is being opened, else the page's own address. */
+  shownUrl: string
   stream: Stream
   onGo(typed: string): boolean
   onSave(): void
@@ -468,7 +551,7 @@ function Bar({
   children?: React.ReactNode
 }) {
   const [draft, setDraft] = useState<string | null>(null)
-  const shown = draft ?? (page.url === BLANK ? '' : page.url)
+  const shown = draft ?? (shownUrl === BLANK ? '' : shownUrl)
   return (
     <header className="flex min-h-9 shrink-0 items-center gap-1 border-b px-1 py-1">
       <Button variant="ghost" size="icon" className="size-7" aria-label="Back" disabled={!page.canBack} onClick={() => stream.send({ t: 'back' })}>
