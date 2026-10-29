@@ -128,6 +128,8 @@ export class Engine {
   private session: CDPSession | null = null
   private sessionPage: Page | null = null
   private listeners = new Set<Listener>()
+  /** Told every change of status, without being a viewer: watching these starts no browser and casts nothing. */
+  private statusListeners = new Set<(status: Status) => void>()
   private size: Size & { scale: number } = { width: 1280, height: 800, scale: 1 }
   private status: Status = { state: 'idle', why: null }
   private cdpPort: number | null = null
@@ -163,6 +165,16 @@ export class Engine {
   private setStatus(status: Status): void {
     this.status = status
     for (const one of this.listeners) one.status?.(status)
+    for (const one of this.statusListeners) one(status)
+  }
+
+  /**
+   * Hear each change of status (starting, ready, failed or closed) without watching the page: unlike
+   * `watch`, this starts no browser. Returns the function that stops it.
+   */
+  onStatus(listener: (status: Status) => void): () => void {
+    this.statusListeners.add(listener)
+    return () => void this.statusListeners.delete(listener)
   }
 
   /** The running browser, started on first use. Rejects with a sentence a person can act on. */
@@ -249,6 +261,9 @@ export class Engine {
       this.adopt(page, true)
     })
     context.on('close', () => {
+      /* No browser, no endpoint: the page's panel is told so (`live.ts`), not left showing a dead port. */
+      this.cdpPort = null
+      this.cdpWs = null
       this.context = null
       this.starting = null
       this.current = null

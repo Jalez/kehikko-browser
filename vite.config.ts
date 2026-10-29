@@ -7,7 +7,7 @@ import { defineConfig, type Plugin } from 'vite'
 
 import { ENGINE, serving, stopEngine } from './browser/index.ts'
 import { serveStream } from './browser/stream.ts'
-import { BUILD, MANIFEST, TICKET, answer, ours, servingAt } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer, ours, servingAt, stream as events } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 
 /**
@@ -62,6 +62,8 @@ export default defineConfig({
     doors({
       manifest: MANIFEST,
       answer,
+      /* The endpoint's news (`live.ts`); the screencast's socket is `stream()` above. */
+      stream: events,
       build: BUILD,
       page: { title: 'Browser', ticket: TICKET },
       ours,

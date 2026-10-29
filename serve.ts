@@ -3,7 +3,7 @@ import { run } from 'kehikot-module-protocol/run'
 
 import { ENGINE, serving, stopEngine } from './browser/index.ts'
 import { streamSockets } from './browser/stream.ts'
-import { BUILD, MANIFEST, TICKET, answer, ours, servingAt } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer, ours, servingAt, stream as events } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 
 /**
@@ -31,6 +31,8 @@ const running = await run({
   dir: import.meta.dirname,
   manifest: MANIFEST,
   answer,
+  /* The endpoint's news (`live.ts`), on the doors' stream door; the screencast is `sockets`. */
+  stream: events,
   build: BUILD,
   ticket: TICKET,
   ours,

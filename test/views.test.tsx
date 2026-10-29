@@ -106,7 +106,7 @@ function api(over: Partial<Api> = {}): Api {
     rename: () => Promise.resolve([]),
     place: () => Promise.resolve(null),
     record: () => Promise.resolve(),
-    endpoint: () => Promise.resolve({ endpoint: null, snippets: null }),
+    followEndpoint: (on) => (on({ endpoint: null, snippets: null }), () => {}),
     console: () => Promise.resolve({ entries: [entry(1, 'error', 'from before')], dropped: 0, last: 1 }),
     clearConsole: () => Promise.resolve(),
     openDevtools: () => Promise.resolve(''),
