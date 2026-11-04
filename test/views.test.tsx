@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import { Browser, headerItems } from '../src/app.tsx'
+import { headerItems } from '../src/app.tsx'
+import { Browser } from './hosted.tsx'
 import type { Run } from '../src/lib/runs.ts'
 import type { ShotSet } from '../src/lib/shots.ts'
 import { appendEntry, ConsoleView, filterEntries, Posting } from '../src/view/panels.tsx'
@@ -160,6 +161,26 @@ describe('View › Show', () => {
     fireEvent.click(screen.getByRole('button', { name: 'OK to post' }))
     await waitFor(() => expect(screen.getByTestId('posting').textContent).toContain('You said OK'))
     expect(approved).toEqual(['gh#12'])
+  })
+
+  test('the view is restored from what this kehikko kept, a press keeps it beside the other keys, and another kehikko brings its own', async () => {
+    const s = fakeStream()
+    const kept: unknown[] = []
+    const pressRef = { current: (_: { item: string; value?: string | boolean }) => undefined as string | void }
+    const keeping = { ...host, kehikko: { id: 1, name: 'One', key: 'one' }, kept: { view: 'console', follow: false }, remember: (next: unknown) => void kept.push(next) } as unknown as Host
+    const { rerender } = render(<Browser host={keeping} api={api()} makeStream={s.make} pressRef={pressRef} />)
+    await waitFor(() => expect(screen.getByTestId('console-lines').textContent).toContain('from before'))
+
+    act(() => void pressRef.current({ item: 'view', value: 'walkthroughs' }))
+    await waitFor(() => expect(screen.queryByTestId('console-lines')).toBeNull())
+    await waitFor(() => expect(kept.at(-1)).toEqual({ view: 'walkthroughs', follow: false }))
+
+    /* Following picks is kept with the view, not over it. */
+    act(() => void pressRef.current({ item: 'follow', value: true }))
+    expect(kept.at(-1)).toEqual({ view: 'walkthroughs', follow: true })
+
+    rerender(<Browser host={{ ...keeping, kehikko: { id: 2, name: 'Two', key: 'two' }, kept: { view: 'console' } } as Host} api={api()} makeStream={s.make} pressRef={pressRef} />)
+    await waitFor(() => expect(screen.getByTestId('console-lines')).toBeDefined())
   })
 
   test('posting says where it stands', () => {

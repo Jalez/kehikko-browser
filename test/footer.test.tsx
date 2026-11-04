@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { FOOTER_KINDS, footerItemsSchema, type FooterItem } from 'kehikot-module-protocol'
 
-import { Browser } from '../src/app.tsx'
+import { Browser } from './hosted.tsx'
 import { FOOT, footerItems } from '../src/lib/footer.ts'
 import type { Api } from '../src/wire/api.ts'
 import type { PageState, Stream, StreamEvents } from '../src/wire/stream.ts'

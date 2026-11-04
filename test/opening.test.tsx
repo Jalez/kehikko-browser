@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
-import { Browser } from '../src/app.tsx'
+import { Browser } from './hosted.tsx'
 import { FAILED_WORDS, LOADING_GRACE_MS, LOADING_WORDS, SLOW_WORDS, covering, troubleOf } from '../src/lib/loading.ts'
 import { addressShown, alreadyOpening, committed, openingSaid, pickedOpening, startOpening } from '../src/lib/opening.ts'
 import type { Api } from '../src/wire/api.ts'
