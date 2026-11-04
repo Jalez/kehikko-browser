@@ -28,7 +28,8 @@ import { useKehikot, type Host } from '@/wire/use-kehikot'
  * every bit of state and declares the whole list again on each change.
  *
  * - Go › Saved addresses: jump to one. Agents may press it (open_address does the same by name).
- * - Run › Save this address: saved under its title; renamed in the page.
+ * - Run › Save this address: saved under its title; renamed in the page. Not here when the host
+ *   draws the footer: Save address sits there, beside the address it saves (never in both rows).
  * - View › Follow picked issues, and the pinned button that stops or resumes it.
  * - Run › Playwright endpoint…: the info view. An agent is sent to `cdp_endpoint`.
  * - Run › Edit saved addresses…: the page's list, to rename and remove.
@@ -37,7 +38,20 @@ import { useKehikot, type Host } from '@/wire/use-kehikot'
  * - Run › Open DevTools: Chromium's own DevTools for the page, in a window of its own. The
  *   person's alone: it opens a window on their screen.
  */
-export function headerItems({ saved, follow, canSave, view = 'browser' }: { saved: readonly Saved[]; follow: boolean; canSave: boolean; view?: View }): HeaderItem[] {
+export function headerItems({
+  saved,
+  follow,
+  canSave,
+  view = 'browser',
+  saveInFooter = false,
+}: {
+  saved: readonly Saved[]
+  follow: boolean
+  canSave: boolean
+  view?: View
+  /** The host draws the footer, and Save address sits there beside the address it saves: not here too. */
+  saveInFooter?: boolean
+}): HeaderItem[] {
   const items: unknown[] = [{ kind: 'switch', id: 'view', label: 'Show', options: VIEWS.map((one) => ({ id: one.id, label: one.label })), value: view, agents: true }]
   if (saved.length) {
     items.push({
@@ -58,14 +72,18 @@ export function headerItems({ saved, follow, canSave, view = 'browser' }: { save
       pinned: true,
       agents: true,
     },
-    {
+  )
+  if (!saveInFooter) {
+    items.push({
       kind: 'run',
       id: 'save',
       label: 'Save this address',
       icon: 'save',
       agents: true,
       disabled: canSave ? null : 'There is no web page open to save, or no project to save it in.',
-    },
+    })
+  }
+  items.push(
     { kind: 'run', id: 'manage', label: 'Edit saved addresses…', icon: 'pencil', group: 'Addresses' },
     { kind: 'run', id: 'endpoint', label: 'Playwright endpoint…', icon: 'code', group: 'Playwright', tool: 'cdp_endpoint' },
     { kind: 'run', id: 'devtools', label: 'Open DevTools', icon: 'external', group: 'Playwright' },
@@ -519,14 +537,14 @@ export function Browser({
   if (pressRef) pressRef.current = press
 
   const canSave = Boolean(projectPath) && /^https?:/.test(page.url)
-  const items = useMemo(() => headerItems({ saved, follow, canSave, view }), [saved, follow, canSave, view])
-  const { header } = host
-  useEffect(() => header(items), [header, items])
-
   /* The footer the host draws, when it draws one (2.38.0); otherwise the page's own top bar. With a
      host that draws a footer field (2.46.0) the address is in the footer too, and the page has no row. */
   const hosted = host.where === 'hosted'
   const drawsFooter = hosted && host.drawsFooter === true
+  const items = useMemo(() => headerItems({ saved, follow, canSave, view, saveInFooter: drawsFooter }), [saved, follow, canSave, view, drawsFooter])
+  const { header } = host
+  useEffect(() => header(items), [header, items])
+
   const drawsField = hosted && footerDraws({ footer: host.drawsFooter ?? null, footerKinds: host.footerKinds ?? null }, 'input')
   const shownUrl = addressShown(opening, page.url)
   const footerSaid = drawsFooter

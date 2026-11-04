@@ -99,6 +99,12 @@ describe('the header it declares', () => {
     expect(items.find((i) => i.id === 'pin')).toMatchObject({ label: 'Follow picks again' })
     expect((items.find((i) => i.id === 'save') as { disabled: string | null }).disabled).toBeTruthy()
   })
+
+  test('with the host drawing the footer, Save is the footer\'s alone: never in both rows', () => {
+    const items = headerItems({ saved, follow: true, canSave: true, saveInFooter: true })
+    expect(items.some((i) => i.id === 'save')).toBe(false)
+    expect(items.find((i) => i.id === 'view')).toBeDefined()
+  })
 })
 
 describe('the page', () => {
