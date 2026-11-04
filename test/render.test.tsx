@@ -21,6 +21,7 @@ function fakeStream() {
       stop: () => {},
       send: (m: Record<string, unknown>) => sent.push(m),
       resize: () => {},
+      shown: () => {},
     } as unknown as Stream
   }
   return { sent, make, events: () => events }

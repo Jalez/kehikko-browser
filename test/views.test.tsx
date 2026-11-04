@@ -63,7 +63,7 @@ function fakeStream() {
   let events: StreamEvents = {}
   const make = (e: StreamEvents) => {
     events = e
-    return { start: () => events.open?.(true), stop: () => {}, send: () => {}, resize: () => {} } as unknown as Stream
+    return { start: () => events.open?.(true), stop: () => {}, send: () => {}, resize: () => {}, shown: () => {} } as unknown as Stream
   }
   return { make, events: () => events }
 }

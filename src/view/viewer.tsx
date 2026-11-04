@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 import { buttonName, fitFrame, modifierBits, toViewport, viewportFor, type Rect } from '@/lib/input'
-import type { Stream } from '@/wire/stream'
+import type { Frame, Stream } from '@/wire/stream'
 
 /**
  * The browser's screen: screencast frames drawn on a canvas, and the person's
@@ -19,7 +19,7 @@ export function Viewer({
 }: {
   stream: Stream
   /** Where the parent's stream handler hands each frame. */
-  frames: { current: ((frame: { data: string; width: number; height: number }) => void) | null }
+  frames: { current: ((frame: Frame) => void) | null }
   onCopied: { current: ((text: string) => void) | null }
 }) {
   const box = useRef<HTMLDivElement>(null)
@@ -29,49 +29,56 @@ export function Viewer({
   const clicks = useRef({ at: 0, x: 0, y: 0, count: 0 })
   const pressed = useRef(0)
 
-  /* Frames: the latest one wins; a slow decode never queues. */
+  /* Frames: the latest one wins; a slow decode never queues. Each JPEG is decoded off the main
+     thread (`decoded`) before it is drawn, so drawing it is a copy and a large frame does not stall
+     the pointer and keys on their way back. */
   useEffect(() => {
     let decoding = false
-    let next: { data: string; width: number; height: number } | null = null
-    const image = new Image()
-    const draw = (frame: { data: string; width: number; height: number }) => {
+    let live = true
+    let next: Frame | null = null
+    const paint = (image: CanvasImageSource, frame: Frame) => {
+      const c = canvas.current
+      if (c) {
+        const ctx = c.getContext('2d')
+        const scale = window.devicePixelRatio || 1
+        const css = { width: c.clientWidth, height: c.clientHeight }
+        if (c.width !== Math.round(css.width * scale) || c.height !== Math.round(css.height * scale)) {
+          c.width = Math.round(css.width * scale)
+          c.height = Math.round(css.height * scale)
+        }
+        const rect = fitFrame(frame, css)
+        drawn.current = rect
+        frameSize.current = { width: frame.width, height: frame.height }
+        if (ctx) {
+          ctx.setTransform(scale, 0, 0, scale, 0, 0)
+          ctx.clearRect(0, 0, css.width, css.height)
+          ctx.drawImage(image, rect.left, rect.top, rect.width, rect.height)
+        }
+      }
+    }
+    const draw = (frame: Frame) => {
       decoding = true
-      image.onload = () => {
-        const c = canvas.current
-        if (c) {
-          const ctx = c.getContext('2d')
-          const scale = window.devicePixelRatio || 1
-          const css = { width: c.clientWidth, height: c.clientHeight }
-          if (c.width !== Math.round(css.width * scale) || c.height !== Math.round(css.height * scale)) {
-            c.width = Math.round(css.width * scale)
-            c.height = Math.round(css.height * scale)
+      decoded(frame.data)
+        .then((image) => {
+          if (live) paint(image, frame)
+          if ('close' in image) image.close()
+        })
+        .catch(() => {})
+        .finally(() => {
+          decoding = false
+          if (live && next) {
+            const n = next
+            next = null
+            draw(n)
           }
-          const rect = fitFrame(frame, css)
-          drawn.current = rect
-          frameSize.current = { width: frame.width, height: frame.height }
-          if (ctx) {
-            ctx.setTransform(scale, 0, 0, scale, 0, 0)
-            ctx.clearRect(0, 0, css.width, css.height)
-            ctx.drawImage(image, rect.left, rect.top, rect.width, rect.height)
-          }
-        }
-        decoding = false
-        if (next) {
-          const n = next
-          next = null
-          draw(n)
-        }
-      }
-      image.onerror = () => {
-        decoding = false
-      }
-      image.src = `data:image/jpeg;base64,${frame.data}`
+        })
     }
     frames.current = (frame) => {
       if (decoding) next = frame
       else draw(frame)
     }
     return () => {
+      live = false
       frames.current = null
     }
   }, [frames])
@@ -119,7 +126,8 @@ export function Viewer({
       el.removeEventListener('wheel', wheel)
       el.removeEventListener('paste', paste)
     }
-  })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream])
 
   useEffect(() => {
     onCopied.current = (text) => {
@@ -218,4 +226,33 @@ export function Viewer({
       <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
     </div>
   )
+}
+
+/**
+ * A frame's JPEG, decoded and ready to draw: `createImageBitmap` for the bytes the socket brings
+ * (decoded off the main thread), and an image's own `decode()` for base64 text or where there is no
+ * `createImageBitmap`.
+ */
+function decoded(data: Blob | string): Promise<ImageBitmap | HTMLImageElement> {
+  if (typeof data !== 'string' && typeof createImageBitmap === 'function') return createImageBitmap(data)
+  const src = typeof data === 'string' ? `data:image/jpeg;base64,${data}` : URL.createObjectURL(data)
+  const done = () => {
+    if (typeof data !== 'string') URL.revokeObjectURL(src)
+  }
+  const image = new Image()
+  if (typeof image.decode === 'function') {
+    image.src = src
+    return image.decode().then(
+      () => (done(), image),
+      (error: unknown) => {
+        done()
+        throw error
+      },
+    )
+  }
+  return new Promise((resolve, reject) => {
+    image.onload = () => (done(), resolve(image))
+    image.onerror = (error) => (done(), reject(error))
+    image.src = src
+  })
 }

@@ -11,6 +11,20 @@ address; nothing here is Kehikot-specific).
   canvas); your pointer, wheel and keys go back (`Input.dispatch*`); it is
   resized to the container (`Emulation.setDeviceMetricsOverride`). Host
   overlays stack over it as over any page.
+- **Back, Forward, Reload in the container's footer.** With a host that draws
+  module footers (protocol 2.38.0, `drawsFooter`), they are a row along the
+  bottom edge in the host's own look, with the page's title and Save address;
+  Reload is Stop while a page loads. The address stays a field along the top,
+  since a footer item cannot take typing. A host that draws no footer gets the
+  old bar along the top, unchanged (`src/lib/footer.ts`).
+- **A loading screen while a page loads.** The protocol's cover, the same
+  mark and sentence as Kehikot's own loading screen, over the whole browser:
+  "Loading content…" with what is being opened, from the moment it is asked
+  (a pick, a hand-over, a typed address) or, for a link clicked in the page,
+  back or reload, once the load has taken longer than 300 ms. It ends on the
+  page's first frame and its `domcontentloaded`. A load that failed says so
+  with Try again; one still going after 30 s says it is taking long; either
+  can be put away to look at the page as it is (`src/lib/loading.ts`).
 - **Its own profile, kept.** Logins survive restarts, even one made a moment
   before Browser stopped (see "Stopping"). The profile is
   machine-level, in `~/Library/Application Support/Kehikot/browser-profile`
@@ -148,7 +162,12 @@ Both servers share the doors (`answer` and `ours` in `doors.ts`, mounted by
 `browser/stream.ts`, on `ws` there and on Bun's WebSocket here). On Bun the
 handshake fence is the protocol's `socketFence`, the same rule as `fenced`; the
 ticket is still the first message. A frame waits for the last one to have left,
-which is `ws.send`'s callback on Vite and Bun's `drain` here.
+which is `ws.send`'s callback on Vite and Bun's `drain` here. A frame is the one
+binary message on the socket (`src/lib/frame.ts`: its width and height, then
+the JPEG's bytes), decoded on the page with `createImageBitmap`, off the main
+thread; everything else is JSON text. While the host keeps the page hidden
+(`kehikot.visible`, protocol 2.45.0), the page says `shown: false` and Chrome
+stops casting until someone looks again.
 
 **playwright-core works under Bun** (Bun 1.4.0, playwright-core 1.64.1, Chrome
 155, macOS arm64), so nothing else changed. Checked against a local test page,

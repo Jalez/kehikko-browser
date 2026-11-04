@@ -1,5 +1,7 @@
 import { ticket } from 'kehikot-module-protocol/client'
 
+import { readFrame } from '@/lib/frame'
+
 /**
  * The page's half of the stream socket (`browser/stream.ts`): frames and page
  * state in, pointer, keys and bar presses out. Reconnects on its own, a second
@@ -26,8 +28,15 @@ export interface Dialog {
   defaultValue: string
 }
 
+/** A screencast frame: the JPEG's bytes as they came over the socket (`frame.ts`), or base64 text. */
+export interface Frame {
+  data: Blob | string
+  width: number
+  height: number
+}
+
 export interface StreamEvents {
-  frame?(frame: { data: string; width: number; height: number }): void
+  frame?(frame: Frame): void
   page?(state: PageState): void
   status?(status: Status): void
   dialog?(dialog: Dialog | null): void
@@ -58,6 +67,7 @@ export class Stream {
   private closed = false
   private retry: ReturnType<typeof setTimeout> | null = null
   private size = { width: 1280, height: 800, scale: 1 }
+  private hidden = false
 
   constructor(private readonly events: StreamEvents) {}
 
@@ -80,12 +90,20 @@ export class Stream {
     url.search = ''
     url.hash = ''
     const ws = new WebSocket(url)
+    ws.binaryType = 'arraybuffer'
     this.ws = ws
     ws.onopen = () => {
       ws.send(JSON.stringify({ t: 'hello', ticket: ticket(), ...this.size }))
+      if (this.hidden) ws.send(JSON.stringify({ t: 'shown', on: false }))
       this.events.open?.(true)
     }
     ws.onmessage = (event) => {
+      /* A frame is the one binary message; everything else is JSON text. */
+      if (event.data instanceof ArrayBuffer) {
+        const frame = readFrame(event.data)
+        if (frame) this.events.frame?.({ data: new Blob([frame.image], { type: 'image/jpeg' }), width: frame.width, height: frame.height })
+        return
+      }
       let m: Record<string, unknown>
       try {
         m = JSON.parse(String(event.data)) as Record<string, unknown>
@@ -136,6 +154,13 @@ export class Stream {
 
   send(message: Record<string, unknown>): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message))
+  }
+
+  /** Whether the host has this page on screen (`kehikot.visible`). Hidden, the server sends no frames; said again after a reconnect. */
+  shown(on: boolean): void {
+    if (this.hidden === !on) return
+    this.hidden = !on
+    this.send({ t: 'shown', on })
   }
 
   resize(size: { width: number; height: number; scale: number }): void {

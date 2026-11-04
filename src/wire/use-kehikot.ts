@@ -21,7 +21,9 @@ export interface Host
   extends Pick<
     ProtocolHost<Kept>,
     'where' | 'project' | 'projectPath' | 'epic' | 'theme' | 'request' | 'header' | 'selection' | 'parts' | 'kehikko' | 'kept' | 'remember' | 'address'
-  > {
+  >,
+    /* The footer (2.38.0) and whether the page is on screen (2.45.0): optional, so a screen renders in a test without them. */
+    Partial<Pick<ProtocolHost<Kept>, 'footer' | 'drawsFooter' | 'visible'>> {
   /** When the host's tracker reading last changed (`context.tracker.at`); a pending ref is asked again when it moves. */
   trackerAt: string | null
 }
