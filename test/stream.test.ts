@@ -4,6 +4,7 @@ import { socketFence } from 'kehikot-module-protocol/run'
 
 import type { Engine, Listener } from '../browser/engine.ts'
 import { fenced, streamSession, streamSockets, type Connection } from '../browser/stream.ts'
+import { FRAME_HEAD, frameMessage, readFrame } from '../src/lib/frame.ts'
 
 /** An engine that records who watches and what it was told, and hands back the listener. */
 function watchedEngine() {
@@ -20,19 +21,20 @@ function watchedEngine() {
       }
     },
     navigate: async (url: string) => void told.push(`go ${url}`),
+    shown: async (_: Listener, on: boolean) => void told.push(`shown ${on}`),
   }
   return { engine: engine as unknown as Engine, told, listener: () => listener, unwatched: () => unwatched }
 }
 
 function connection(buffered = 0) {
   const sent: string[] = []
-  const frames: { text: string; done: () => void }[] = []
+  const frames: { bytes: Uint8Array; done: () => void }[] = []
   const closed: [number, string][] = []
   const conn: Connection = {
     open: () => closed.length === 0,
     buffered: () => buffered,
     send: (text) => void sent.push(text),
-    sendFrame: (text, done) => void frames.push({ text, done }),
+    sendFrame: (bytes, done) => void frames.push({ bytes, done }),
     close: (code, reason) => void closed.push([code, reason]),
   }
   return { conn, sent, frames, closed }
@@ -40,7 +42,41 @@ function connection(buffered = 0) {
 
 const frame = { data: 'AAAA', width: 10, height: 10 }
 
+describe('a frame on the socket', () => {
+  test('is its size and the JPEG’s bytes, read back as they were sent', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9])
+    const bytes = frameMessage({ data: jpeg.toString('base64'), width: 1280.4, height: 800 })
+    expect(bytes.length).toBe(FRAME_HEAD + jpeg.length)
+    const read = readFrame(bytes.slice().buffer)
+    expect(read).toMatchObject({ width: 1280, height: 800 })
+    expect(Buffer.from(read!.image).equals(jpeg)).toBe(true)
+  })
+
+  test('a message too short to be one is not a frame', () => {
+    expect(readFrame(new ArrayBuffer(3))).toBeNull()
+  })
+})
+
 describe('the stream session, the same on Vite and on the built server', () => {
+  test('a viewer whose page is hidden is sent no frames, and the engine is told', async () => {
+    const { engine, told, listener } = watchedEngine()
+    const { conn, frames, sent } = connection()
+    const held = streamSession(conn, engine, 't')
+    held.heard(JSON.stringify({ t: 'hello', ticket: 't' }))
+    held.heard(JSON.stringify({ t: 'shown', on: false }))
+    await Bun.sleep(0)
+    listener()!.frame!(frame)
+    expect(frames.length).toBe(0)
+    /* The page's news still goes: the address, the console. */
+    listener()!.page!({ url: 'https://example.test/', title: '', canBack: false, canForward: false, loading: true })
+    expect(sent.some((one) => one.includes('"page"'))).toBe(true)
+    held.heard(JSON.stringify({ t: 'shown', on: true }))
+    await Bun.sleep(0)
+    listener()!.frame!(frame)
+    expect(frames.length).toBe(1)
+    expect(told.filter((one) => one.startsWith('shown'))).toEqual(['shown false', 'shown true'])
+  })
+
   test('nothing is watched until the first message carries the ticket', () => {
     const { engine, listener } = watchedEngine()
     const { conn, closed } = connection()
@@ -100,14 +136,14 @@ describe('the stream session, the same on Vite and on the built server', () => {
 
 describe('the stream on Bun’s WebSocket', () => {
   function bunSocket(sendSays: number) {
-    const sent: string[] = []
+    const sent: (string | Uint8Array)[] = []
     return {
       sent,
       ws: {
         data: { held: null, drained: [] as (() => void)[] },
         readyState: 1,
-        send: (text: string) => {
-          sent.push(text)
+        send: (data: string | Uint8Array) => {
+          sent.push(data)
           return sendSays
         },
         close: () => {},
@@ -125,10 +161,10 @@ describe('the stream on Bun’s WebSocket', () => {
     sockets.message(ws as never, JSON.stringify({ t: 'hello', ticket: 't' }))
     listener()!.frame!(frame)
     listener()!.frame!(frame)
-    expect(sent.filter((s) => s.includes('"frame"')).length).toBe(1)
+    expect(sent.filter((s) => s instanceof Uint8Array).length).toBe(1)
     sockets.drain!(ws as never)
     listener()!.frame!(frame)
-    expect(sent.filter((s) => s.includes('"frame"')).length).toBe(2)
+    expect(sent.filter((s) => s instanceof Uint8Array).length).toBe(2)
   })
 
   test('closing the socket stops the watch', () => {

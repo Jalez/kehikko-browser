@@ -121,6 +121,15 @@ function inPage<A>(fn: (args: A) => unknown, args: A): string {
   return `(() => { const __name = (f) => f; return (${fn.toString()})(${JSON.stringify(args)}) })()`
 }
 
+/** Whether `request` navigates `page`'s main frame. A worker's request has no frame, and asking throws. */
+export function mainNavigation(page: Pick<Page, 'mainFrame'>, request: { isNavigationRequest(): boolean; frame(): unknown }): boolean {
+  try {
+    return request.isNavigationRequest() && request.frame() === page.mainFrame()
+  } catch {
+    return false
+  }
+}
+
 export class Engine {
   private context: BrowserContext | null = null
   private starting: Promise<BrowserContext> | null = null
@@ -139,6 +148,10 @@ export class Engine {
   private casting = false
   private lastState: PageState = { url: BLANK, title: '', canBack: false, canForward: false, loading: false }
   private pushTimer: ReturnType<typeof setTimeout> | null = null
+  /** Viewers whose page is hidden (`kehikot.visible`): told the page's news, sent no frames. */
+  private hidden = new Set<Listener>()
+  /** Pages whose main frame is loading: from the navigation's request to its `domcontentloaded`, or its failure. */
+  private loadingPages = new WeakSet<Page>()
   /** What the pages said: View › Console, `console_log` and `network_failures` all read this one buffer. */
   readonly console = new ConsoleBuffer()
   /** Pages opened for a capture: never adopted, never in front, never streamed. */
@@ -325,7 +338,16 @@ export class Engine {
       if (page === this.current) this.pushState()
     })
     page.on('load', () => page === this.current && this.pushState())
-    page.on('domcontentloaded', () => page === this.current && this.pushState())
+    /* Loading, as a viewer's cover shows it: a main-frame navigation's request starts it (a link, a
+       redirect, back, reload, a script), its document's `domcontentloaded` or its failure ends it. A
+       same-document change (history.pushState) sends no request and is not a load. */
+    page.on('request', (request) => {
+      if (mainNavigation(page, request)) this.setLoading(page, true)
+    })
+    page.on('domcontentloaded', () => {
+      this.setLoading(page, false)
+      if (page === this.current) this.pushState()
+    })
     page.on('dialog', (dialog) => this.onDialog(page, dialog))
     /* What the page says, for View › Console and the agent's console_log / network_failures. */
     page.on('console', (message) => {
@@ -335,6 +357,7 @@ export class Engine {
       this.note({ kind: 'exception', level: 'error', text: error.message || String(error), source: sourceOfStack(error.stack), page: page.url() })
     })
     page.on('requestfailed', (request) => {
+      if (mainNavigation(page, request)) this.setLoading(page, false)
       const said = requestSaid({ url: request.url(), method: request.method(), status: 0, failure: request.failure()?.errorText ?? 'failed', page: page.url() })
       if (said) this.note(said)
     })
@@ -386,7 +409,7 @@ export class Engine {
     })
     await this.applySize(session)
     this.casting = false
-    if (this.listeners.size) await this.cast(true)
+    if (this.anyoneLooking()) await this.cast(true)
   }
 
   private async applySize(session: CDPSession | null = this.session): Promise<void> {
@@ -448,7 +471,14 @@ export class Engine {
       }
     }
     const title = await page.title().catch(() => '')
-    return { url: page.url(), title, canBack, canForward, loading: false }
+    return { url: page.url(), title, canBack, canForward, loading: this.loadingPages.has(page) }
+  }
+
+  private setLoading(page: Page, on: boolean): void {
+    if (this.loadingPages.has(page) === on) return
+    if (on) this.loadingPages.add(page)
+    else this.loadingPages.delete(page)
+    if (page === this.current) this.pushState()
   }
 
   state(): PageState {
@@ -471,13 +501,33 @@ export class Engine {
     listener.status?.(this.status)
     listener.page?.(this.lastState)
     void this.ready()
-      .then(() => this.cast(true))
+      .then(() => (this.anyoneLooking() ? this.cast(true) : undefined))
       .then(() => this.pushState())
       .catch(() => {})
     return () => {
       this.listeners.delete(listener)
-      if (this.listeners.size === 0) void this.cast(false)
+      this.hidden.delete(listener)
+      if (!this.anyoneLooking()) void this.cast(false)
     }
+  }
+
+  /**
+   * A viewer's page was hidden or shown again (the host keeps a page alive on a kehikko the person
+   * left). While nobody is looking, Chrome stops casting: no frames are made, sent or decoded for a
+   * canvas nobody sees. Shown again, the cast restarts, and its first frame is the page as it is now.
+   */
+  async shown(listener: Listener, on: boolean): Promise<void> {
+    if (!this.listeners.has(listener)) return
+    const before = this.anyoneLooking()
+    if (on) this.hidden.delete(listener)
+    else this.hidden.add(listener)
+    const now = this.anyoneLooking()
+    if (now !== before) await this.cast(now)
+  }
+
+  private anyoneLooking(): boolean {
+    for (const one of this.listeners) if (!this.hidden.has(one)) return true
+    return false
   }
 
   /** The viewport a viewer asks for: its canvas in CSS pixels and its device pixel ratio. */

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { Browser } from '../src/app.tsx'
+import { FAILED_WORDS, LOADING_GRACE_MS, LOADING_WORDS, SLOW_WORDS, covering, troubleOf } from '../src/lib/loading.ts'
 import { addressShown, alreadyOpening, committed, openingSaid, pickedOpening, startOpening } from '../src/lib/opening.ts'
 import type { Api } from '../src/wire/api.ts'
 import type { PageState, Stream, StreamEvents } from '../src/wire/stream.ts'
@@ -24,10 +25,15 @@ function fakeStream(connected = true) {
   const make = (e: StreamEvents) => {
     events = e
     return {
-      start: () => connected && events.open?.(true),
+      start: () => {
+        if (!connected) return
+        events.open?.(true)
+        events.status?.({ state: 'ready', why: null, endpoint: null })
+      },
       stop: () => {},
       send: (m: Record<string, unknown>) => sent.push(m),
       resize: () => {},
+      shown: () => {},
     } as unknown as Stream
   }
   return { sent, make, events: () => events, gos: () => sent.filter((m) => m.t === 'go') }
@@ -163,17 +169,17 @@ describe('a hand-over', () => {
 })
 
 describe('a pick', () => {
-  test('says “Opening !4013…” before the host has answered, then opens the page', async () => {
+  test('covers the browser with “Loading content…, Opening !4013…” before the host has answered, then opens the page', async () => {
     const s = fakeStream()
     const { h, answer } = host({}, false)
     const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
     act(() => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
-    expect(screen.getByTestId('opening').textContent).toBe('Opening !4013…')
+    expect(screen.getByTestId('opening').textContent).toBe('Loading content…Opening !4013…')
     expect(s.gos()).toEqual([])
     await act(async () => answer())
     expect(s.gos()).toEqual([{ t: 'go', url: MR }])
     expect(bar()).toBe(MR)
-    expect(screen.getByTestId('opening').textContent).toBe('Opening !4013…')
+    expect(screen.getByTestId('opening').textContent).toBe('Loading content…Opening !4013…')
   })
 
   test('made while the stream is down is opened when it comes up, if it is still the selection', async () => {
@@ -198,7 +204,7 @@ describe('a pick', () => {
     expect(s.gos()).toEqual([])
   })
 
-  test('a failed navigation ends “Opening” with the server’s sentence', async () => {
+  test('a failed navigation turns the cover into the failure, with the server’s sentence and Try again', async () => {
     const s = fakeStream()
     const { h } = host()
     const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
@@ -206,7 +212,33 @@ describe('a pick', () => {
     expect(screen.getByTestId('opening')).toBeDefined()
     act(() => s.events().said?.(`Could not open ${MR}: net::ERR_NAME_NOT_RESOLVED`))
     expect(screen.queryByTestId('opening')).toBeNull()
-    expect(screen.getByTestId('said').textContent).toContain('ERR_NAME_NOT_RESOLVED')
+    const trouble = screen.getByTestId('trouble')
+    expect(trouble.textContent).toContain('The page could not be loaded.')
+    expect(trouble.textContent).toContain('ERR_NAME_NOT_RESOLVED')
+    /* Try again asks for the same address again, and the cover says Loading once more. */
+    act(() => screen.getByText('Try again').click())
+    expect(s.gos()).toEqual([
+      { t: 'go', url: MR },
+      { t: 'go', url: MR },
+    ])
+    expect(screen.getByTestId('opening')).toBeDefined()
+  })
+
+  test('Chrome’s own error page ends the load as a failure, and the person can put the cover away', async () => {
+    const s = fakeStream()
+    const { h } = host()
+    const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().page?.(page(HOME)))
+    await act(async () => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
+    act(() => s.events().page?.(page('chrome-error://chromewebdata/')))
+    expect(screen.getByTestId('trouble').textContent).toContain('The page could not be loaded.')
+    /* The engine's sentence, heard after the page, fills in why. */
+    act(() => s.events().said?.(`Could not open ${MR}: net::ERR_CONNECTION_REFUSED`))
+    expect(screen.getByTestId('trouble').textContent).toContain('ERR_CONNECTION_REFUSED')
+    expect(screen.queryByTestId('said')).toBeNull()
+    act(() => screen.getByText('Show the page').click())
+    expect(screen.queryByTestId('trouble')).toBeNull()
+    expect(screen.queryByTestId('opening')).toBeNull()
   })
 })
 
@@ -234,5 +266,57 @@ describe('the time a pick takes in this page', () => {
     /* The one asynchronous step is the host's answer; a fake host answers at once, so this is React's work only. */
     expect(marks.go! - (picked - t0)).toBeLessThan(250)
     expect(marks.asked! - (picked - t0)).toBeLessThan(250)
+  })
+})
+
+describe('the engine’s own loading', () => {
+  const loading = (url: string): PageState => ({ ...page(url), loading: true })
+
+  test('a link clicked in the page is covered after the grace, and the cover ends on the load', async () => {
+    const s = fakeStream()
+    const { h } = host()
+    render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().page?.(page(HOME)))
+    act(() => s.events().page?.(loading(HOME)))
+    /* A quick hop is not covered. */
+    expect(screen.queryByTestId('opening')).toBeNull()
+    await act(async () => new Promise((r) => setTimeout(r, LOADING_GRACE_MS + 30)))
+    expect(screen.getByTestId('opening').textContent).toContain('Loading content…')
+    act(() => s.events().page?.(page(MR)))
+    expect(screen.queryByTestId('opening')).toBeNull()
+  })
+
+  test('a load quicker than the grace is never covered', async () => {
+    const s = fakeStream()
+    const { h } = host()
+    render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().page?.(loading(HOME)))
+    act(() => s.events().page?.(page(MR)))
+    await act(async () => new Promise((r) => setTimeout(r, LOADING_GRACE_MS + 30)))
+    expect(screen.queryByTestId('opening')).toBeNull()
+  })
+})
+
+describe('the cover, as a value', () => {
+  const on = startOpening(null, { url: MR, label: '!4013', from: 'pick', before: HOME })
+
+  test('loading says what is being opened; nothing is covered when nothing loads', () => {
+    expect(covering({ opening: on, loadingShown: false, trouble: null, pageUrl: HOME })).toEqual({ state: 'loading', words: LOADING_WORDS, detail: 'Opening !4013…' })
+    expect(covering({ opening: null, loadingShown: true, trouble: null, pageUrl: MR })).toMatchObject({ state: 'loading', words: LOADING_WORDS })
+    expect(covering({ opening: null, loadingShown: false, trouble: null, pageUrl: MR })).toBeNull()
+  })
+
+  test('a failure or a slow load wins over loading, and Try again asks for the same address', () => {
+    const failed = troubleOf('failed', on, HOME, 'net::ERR_NAME_NOT_RESOLVED')
+    expect(covering({ opening: on, loadingShown: true, trouble: failed, pageUrl: HOME })).toEqual({
+      state: 'refused',
+      words: FAILED_WORDS,
+      detail: 'net::ERR_NAME_NOT_RESOLVED',
+      retry: MR,
+    })
+    const slow = troubleOf('slow', on, HOME)
+    expect(covering({ opening: on, loadingShown: true, trouble: slow, pageUrl: HOME })).toEqual({ state: 'refused', words: SLOW_WORDS, detail: 'Opening !4013…', retry: MR })
+    /* A load nobody asked for by address (a link in the page) retries the page it was on, or nothing. */
+    expect(troubleOf('failed', null, 'chrome-error://chromewebdata/').url).toBeNull()
   })
 })

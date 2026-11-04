@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream'
 import type { RunSockets } from 'kehikot-module-protocol/run'
 import { WebSocketServer } from 'ws'
 
+import { frameMessage } from '../src/lib/frame.ts'
 import type { Engine, Listener } from './engine.ts'
 
 /**
@@ -53,7 +54,8 @@ export interface Connection {
   /** Bytes queued on the socket and not yet sent. */
   buffered: () => number
   send: (text: string) => void
-  sendFrame: (text: string, done: () => void) => void
+  /** A frame, as the binary message `frameMessage` makes. */
+  sendFrame: (bytes: Uint8Array, done: () => void) => void
   close: (code: number, reason: string) => void
 }
 
@@ -82,7 +84,7 @@ export function serveStream(http: Server, port: number, engine: Engine, ticket: 
           open: () => ws.readyState === ws.OPEN,
           buffered: () => ws.bufferedAmount,
           send: (text) => ws.send(text),
-          sendFrame: (text, done) => ws.send(text, () => done()),
+          sendFrame: (bytes, done) => ws.send(bytes, { binary: true }, () => done()),
           close: (code, reason) => ws.close(code, reason),
         },
         engine,
@@ -119,8 +121,8 @@ export function streamSockets(
             send: (text) => {
               ws.send(text)
             },
-            sendFrame: (text, done) => {
-              if (ws.send(text) === -1) ws.data.drained.push(done)
+            sendFrame: (bytes, done) => {
+              if (ws.send(bytes) === -1) ws.data.drained.push(done)
               else done()
             },
             close: (code, reason) => ws.close(code, reason),
@@ -166,15 +168,17 @@ export function streamSession(ws: Connection, engine: Engine, ticket: string): S
   let stop: (() => void) | null = null
   let gone = false
   let busy = false
+  /* The viewer's page is hidden by its host: news still goes, frames do not. */
+  let hidden = false
   const send = (message: unknown) => {
     if (ws.open()) ws.send(JSON.stringify(message))
   }
   const listener: Listener = {
     frame(frame) {
       /* A slow viewer skips frames rather than queueing seconds of them. */
-      if (busy || !ws.open() || ws.buffered() > BEHIND) return
+      if (hidden || busy || !ws.open() || ws.buffered() > BEHIND) return
       busy = true
-      ws.sendFrame(JSON.stringify({ t: 'frame', ...frame }), () => {
+      ws.sendFrame(frameMessage(frame), () => {
         busy = false
       })
     },
@@ -259,6 +263,9 @@ export function streamSession(ws: Connection, engine: Engine, ticket: string): S
         return
       case 'stop':
         return engine.stop()
+      case 'shown':
+        hidden = m.on === false
+        return engine.shown(listener, !hidden)
       case 'dialog':
         return engine.answerDialog(m.accept === true, typeof m.text === 'string' ? m.text : undefined)
       case 'retry':

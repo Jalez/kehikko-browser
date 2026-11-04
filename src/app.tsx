@@ -10,14 +10,16 @@ import { Input } from '@/components/ui/input'
 import { BLANK, labelFor, normaliseAddress } from '@/lib/address'
 import { urlForSelection, refsToAsk } from '@/lib/follow'
 import { addressToOpen, handedSaid, type Handed } from '@/lib/handed'
-import { addressShown, alreadyOpening, committed, openingSaid, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
+import { FOOT, footerItems } from '@/lib/footer'
+import { LOADING_AT_MOST, LOADING_GRACE_MS, SHOW_ANYWAY, covering, failedPage, troubleOf, type Trouble } from '@/lib/loading'
+import { addressShown, alreadyOpening, committed, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
 import { placeKeys } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
 import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
 import { Viewer } from '@/view/viewer'
 import { Sheet } from '@/view/sheet'
 import { api as realApi, type Api, type Endpoint } from '@/wire/api'
-import { Stream, type ConsoleEntry, type Dialog, type PageState, type Status } from '@/wire/stream'
+import { Stream, type ConsoleEntry, type Dialog, type Frame, type PageState, type Status } from '@/wire/stream'
 import { useKehikot, type Host } from '@/wire/use-kehikot'
 
 /**
@@ -76,8 +78,8 @@ type Panel = 'endpoint' | 'saved' | null
 
 const NO_PAGE: PageState = { url: BLANK, title: '', canBack: false, canForward: false, loading: false }
 
-/** How long "Opening …" is shown at most: the engine gives up on a navigation after 30 s. */
-export const OPENING_AT_MOST = 30_000
+/** How long the cover says "Loading" at most before it says the page is taking long (`loading.ts`). */
+export const OPENING_AT_MOST = LOADING_AT_MOST
 
 export function App() {
   const pressRef = useRef<(press: Press) => string | void>(() => 'Not ready yet.')
@@ -108,7 +110,7 @@ export function Browser({
   const [view, setView] = useState<View>('browser')
   const [focus, setFocus] = useState<string | null>(null)
   const [lines, setLines] = useState<{ entries: ConsoleEntry[]; dropped: number }>({ entries: [], dropped: 0 })
-  const frames = useRef<((frame: { data: string; width: number; height: number }) => void) | null>(null)
+  const frames = useRef<((frame: Frame) => void) | null>(null)
   const copied = useRef<((text: string) => void) | null>(null)
   const server = useServerStanding()
   /* What is being opened, from the moment it is asked until the new page's first frame (see `opening.ts`). */
@@ -119,6 +121,15 @@ export function Browser({
     setOpeningState(next)
   }, [])
   const pageRef = useRef<PageState>(NO_PAGE)
+  /* A load that failed or is taking long (see `loading.ts`), and whether the person put the cover away for this load. */
+  const [trouble, setTroubleState] = useState<Trouble | null>(null)
+  const troubleRef = useRef<Trouble | null>(null)
+  const setTrouble = useCallback((next: Trouble | null) => {
+    troubleRef.current = next
+    setTroubleState(next)
+  }, [])
+  const [putAway, setPutAway] = useState(false)
+  const [loadingShown, setLoadingShown] = useState(false)
 
   const stream = useMemo(
     () =>
@@ -128,9 +139,21 @@ export function Browser({
           if (openingRef.current && painted(openingRef.current)) setOpening(null)
         },
         page: (state) => {
+          const was = pageRef.current
           pageRef.current = state
           setPage(state)
+          /* A new load starts: whatever went wrong with the last one is behind it. */
+          if (state.loading && !was.loading) {
+            if (troubleRef.current?.kind === 'failed') setTrouble(null)
+            setPutAway(false)
+          }
           const now = openingRef.current
+          /* The main frame landed on Chrome's error page: the navigation failed. The engine's sentence follows, if it has one. */
+          if (failedPage(state.url) && !failedPage(was.url) && (now || was.loading)) {
+            setTrouble(troubleOf('failed', now, was.url))
+            if (now) setOpening(null)
+            return
+          }
           if (now) {
             const next = committed(now, state.url)
             if (next !== now) setOpening(next)
@@ -140,8 +163,18 @@ export function Browser({
         dialog: setDialog,
         copied: (text) => copied.current?.(text),
         said: (text) => {
-          /* The server says something only when a press failed: a navigation that did not happen ends "Opening". */
-          if (openingRef.current) setOpening(null)
+          /* The server says something only when a press failed: a navigation that did not happen turns the cover into its failure. */
+          const now = openingRef.current
+          const known = troubleRef.current
+          if (now) {
+            setOpening(null)
+            setTrouble(troubleOf('failed', now, pageRef.current.url, text))
+            return
+          }
+          if (known?.kind === 'failed' && !known.why) {
+            setTrouble({ ...known, why: text })
+            return
+          }
           setSaid(text)
         },
         open: setConnected,
@@ -189,12 +222,29 @@ export function Browser({
     )
   }, [api])
 
-  /* Never shown longer than the engine would try. */
+  /* The engine's own loading is covered after a grace, so a quick hop inside a site does not flash. */
   useEffect(() => {
-    if (!opening) return
-    const timer = setTimeout(() => openingRef.current === opening && setOpening(null), OPENING_AT_MOST)
+    if (!page.loading) {
+      setLoadingShown(false)
+      return
+    }
+    const timer = setTimeout(() => setLoadingShown(true), LOADING_GRACE_MS)
     return () => clearTimeout(timer)
-  }, [opening, setOpening])
+  }, [page.loading])
+
+  /* "Loading" for no longer than the engine would try; after that it says the page is taking long. */
+  const busy = Boolean(opening) || page.loading
+  useEffect(() => {
+    if (!busy) {
+      /* Taking long, and then it arrived: the cover ends on the load as it would have. */
+      if (troubleRef.current?.kind === 'slow') setTrouble(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      if (!troubleRef.current) setTrouble(troubleOf('slow', openingRef.current, pageRef.current.url))
+    }, OPENING_AT_MOST)
+    return () => clearTimeout(timer)
+  }, [busy, setTrouble])
 
   /**
    * Open an address. `from` says who asked: a pick does not send a second
@@ -213,11 +263,13 @@ export function Browser({
       const from = how.from ?? 'typed'
       if (alreadyOpening(openingRef.current, address.url, from)) return true
       setSaid(null)
+      setTrouble(null)
+      setPutAway(false)
       setOpening(startOpening(openingRef.current, { url: address.url, label: how.label ?? null, from, before: pageRef.current.url }))
       stream.send({ t: 'go', url: address.url })
       return true
     },
-    [setOpening, stream],
+    [setOpening, setTrouble, stream],
   )
 
   /* ---------------- Saved addresses, per project. ---------------- */
@@ -442,9 +494,19 @@ export function Browser({
         openDevtools()
         return
       }
+      /* The footer's (`footer.ts`): the old top bar's buttons. */
+      if (item === FOOT.BACK || item === FOOT.FORWARD || item === FOOT.RELOAD) {
+        stream.send({ t: item })
+        return
+      }
+      if (item === FOOT.STOP) {
+        stream.send({ t: 'stop' })
+        setOpening(null)
+        return
+      }
       return `Browser has nothing called "${item}" to press.`
     },
-    [follow, go, openDevtools, saveHere, saved, setFollow],
+    [follow, go, openDevtools, saveHere, saved, setFollow, setOpening, stream],
   )
   if (pressRef) pressRef.current = press
 
@@ -453,27 +515,43 @@ export function Browser({
   const { header } = host
   useEffect(() => header(items), [header, items])
 
+  /* The footer the host draws, when it draws one (2.38.0); otherwise the page's own top bar. */
+  const drawsFooter = host.where === 'hosted' && host.drawsFooter === true
+  const footerSaid = drawsFooter
+    ? JSON.stringify(footerItems({ url: page.url, title: page.title, canBack: page.canBack, canForward: page.canForward, loading: busy, canSave }))
+    : null
+  const { footer } = host
+  useEffect(() => {
+    if (footerSaid) footer?.(JSON.parse(footerSaid))
+  }, [footer, footerSaid])
+
+  /* Hidden by the host (2.45.0): no frames are made or sent for a canvas nobody sees. */
+  const visible = host.visible !== false
+  useEffect(() => {
+    stream.shown(visible)
+  }, [stream, visible])
+
+  const cover = putAway ? null : covering({ opening, loadingShown, trouble, pageUrl: page.url })
+
   if (server === 'stale') return <Cover state="stale" name="Browser" onRetry={() => location.reload()} />
 
   return (
     <div className="flex h-screen flex-col text-sm">
-      <Bar
-        page={page}
-        shownUrl={addressShown(opening, page.url)}
-        stream={stream}
-        onGo={go}
-        onSave={() => void saveHere().then((why) => why && setSaid(why))}
-        canSave={canSave}
-        onPanel={setPanel}
-      >
-        {host.where === 'unhosted' ? <HeaderMenus items={items} onPress={press} /> : null}
-      </Bar>
-      {opening ? (
-        <div className="relative shrink-0 border-b px-2 py-0.5 text-xs" role="status" data-testid="opening">
-          <span className="bg-primary/60 absolute inset-x-0 top-0 h-0.5 animate-pulse" aria-hidden="true" />
-          <span className="text-muted-foreground block truncate">{openingSaid(opening)}</span>
-        </div>
-      ) : null}
+      {drawsFooter ? (
+        <AddressField shownUrl={addressShown(opening, page.url)} onGo={go} compact />
+      ) : (
+        <Bar
+          page={page}
+          shownUrl={addressShown(opening, page.url)}
+          stream={stream}
+          onGo={go}
+          onSave={() => void saveHere().then((why) => why && setSaid(why))}
+          canSave={canSave}
+          onPanel={setPanel}
+        >
+          {host.where === 'unhosted' ? <HeaderMenus items={items} onPress={press} /> : null}
+        </Bar>
+      )}
       {said ? (
         <p className="text-muted-foreground flex items-center gap-2 border-b px-2 py-1 text-xs" data-testid="said">
           <span className="min-w-0 flex-1 truncate" title={said}>
@@ -498,6 +576,17 @@ export function Browser({
       ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <Viewer stream={stream} frames={frames} onCopied={copied} />
+        {cover && status.state === 'ready' ? (
+          <LoadingCover
+            cover={cover}
+            onRetry={(url) => go(url)}
+            onPutAway={() => {
+              setPutAway(true)
+              setTrouble(null)
+              setOpening(null)
+            }}
+          />
+        ) : null}
         {status.state !== 'ready' ? <Starting status={status} onRetry={() => stream.send({ t: 'retry' })} /> : null}
         {dialog ? <DialogBox dialog={dialog} onAnswer={(accept, text) => stream.send({ t: 'dialog', accept, text })} /> : null}
         {view === 'console' ? (
@@ -550,8 +639,6 @@ function Bar({
   onPanel(panel: Panel): void
   children?: React.ReactNode
 }) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const shown = draft ?? (shownUrl === BLANK ? '' : shownUrl)
   return (
     <header className="flex min-h-9 shrink-0 items-center gap-1 border-b px-1 py-1">
       <Button variant="ghost" size="icon" className="size-7" aria-label="Back" disabled={!page.canBack} onClick={() => stream.send({ t: 'back' })}>
@@ -563,30 +650,7 @@ function Bar({
       <Button variant="ghost" size="icon" className="size-7" aria-label="Reload" onClick={() => stream.send({ t: 'reload' })}>
         <RotateCw className="size-4" />
       </Button>
-      <form
-        className="min-w-0 flex-1"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (onGo(shown)) setDraft(null)
-        }}
-      >
-        <Input
-          aria-label="Address"
-          className="h-7 text-xs"
-          placeholder="Type an address: github.com/…, localhost:5173"
-          value={shown}
-          spellCheck={false}
-          onChange={(event) => setDraft(event.target.value)}
-          onFocus={(event) => event.target.select()}
-          onBlur={() => setDraft(null)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              setDraft(null)
-              ;(event.target as HTMLInputElement).blur()
-            }
-          }}
-        />
-      </form>
+      <AddressField shownUrl={shownUrl} onGo={onGo} />
       <Button variant="ghost" size="icon" className="size-7" aria-label="Save this address" title="Save this address" disabled={!canSave} onClick={onSave}>
         <Bookmark className="size-4" />
       </Button>
@@ -598,18 +662,77 @@ function Bar({
   )
 }
 
+/**
+ * The address, typed. In the old top bar beside the buttons; alone along the top when the host
+ * draws the footer, since a footer item cannot take typing (`compact`: a slimmer row).
+ */
+function AddressField({ shownUrl, onGo, compact = false }: { shownUrl: string; onGo(typed: string): boolean; compact?: boolean }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft ?? (shownUrl === BLANK ? '' : shownUrl)
+  const field = (
+    <form
+      className="min-w-0 flex-1"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (onGo(shown)) setDraft(null)
+      }}
+    >
+      <Input
+        aria-label="Address"
+        className={compact ? 'h-6 border-transparent text-xs shadow-none focus-visible:border-input' : 'h-7 text-xs'}
+        placeholder="Type an address: github.com/…, localhost:5173"
+        value={shown}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        onFocus={(event) => event.target.select()}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            setDraft(null)
+            ;(event.target as HTMLInputElement).blur()
+          }
+        }}
+      />
+    </form>
+  )
+  if (!compact) return field
+  return (
+    <header className="flex shrink-0 items-center border-b px-1 py-0.5" data-testid="address-row">
+      {field}
+    </header>
+  )
+}
+
+/**
+ * Over the whole browser while a page loads: the protocol's cover, the same mark and sentence as the
+ * host's own loading screen, on the page's background so the old page does not show through. A load
+ * that failed or is taking long says so, with Try again and a way to look at the page as it is.
+ */
+function LoadingCover({ cover, onRetry, onPutAway }: { cover: NonNullable<ReturnType<typeof covering>>; onRetry(url: string): void; onPutAway(): void }) {
+  const retry = cover.state === 'refused' ? cover.retry : null
+  return (
+    <div className="bg-background absolute inset-0 flex flex-col" data-testid={cover.state === 'loading' ? 'opening' : 'trouble'}>
+      <Cover state={cover.state} detail={cover.detail} onRetry={retry ? () => onRetry(retry) : undefined}>
+        {cover.words}
+      </Cover>
+      {cover.state === 'refused' ? (
+        <button type="button" className="text-muted-foreground hover:text-foreground mx-auto mb-4 shrink-0 text-xs underline" onClick={onPutAway}>
+          {SHOW_ANYWAY}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 function Starting({ status, onRetry }: { status: Status; onRetry(): void }) {
   return (
-    <div className="bg-background/90 absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center" data-testid="starting">
+    <div className="bg-background absolute inset-0 flex flex-col" data-testid="starting">
       {status.state === 'failed' ? (
-        <>
-          <p className="max-w-md text-sm">{status.why}</p>
-          <Button size="sm" onClick={onRetry}>
-            Try again
-          </Button>
-        </>
+        <Cover state="refused" detail={status.why} onRetry={onRetry}>
+          The browser could not start.
+        </Cover>
       ) : (
-        <p className="text-muted-foreground text-sm">Starting the browser…</p>
+        <Cover state="loading">Starting the browser…</Cover>
       )}
     </div>
   )
