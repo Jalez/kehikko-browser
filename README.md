@@ -11,12 +11,14 @@ address; nothing here is Kehikot-specific).
   canvas); your pointer, wheel and keys go back (`Input.dispatch*`); it is
   resized to the container (`Emulation.setDeviceMetricsOverride`). Host
   overlays stack over it as over any page.
-- **Back, Forward, Reload in the container's footer.** With a host that draws
-  module footers (protocol 2.38.0, `drawsFooter`), they are a row along the
-  bottom edge in the host's own look, with the page's title and Save address;
-  Reload is Stop while a page loads. The address stays a field along the top,
-  since a footer item cannot take typing. A host that draws no footer gets the
-  old bar along the top, unchanged (`src/lib/footer.ts`).
+- **Back, Forward, Reload and the address in the container's footer.** With a
+  host that draws module footers (protocol 2.38.0, `drawsFooter`), they are a
+  row along the bottom edge in the host's own look, with Save address; Reload
+  is Stop while a page loads. A host that also draws a footer field (protocol
+  2.46.0, `footerKinds` names `input`) has the address there too, and the page
+  draws no row of its own. One that draws a footer but no field gets the page's
+  title in the footer and the address alone along the top. A host that draws
+  no footer gets the old bar along the top, unchanged (`src/lib/footer.ts`).
 - **A loading screen while a page loads.** The protocol's cover, the same
   mark and sentence as Kehikot's own loading screen, over the whole browser:
   "Loading content…" with what is being opened, from the moment it is asked

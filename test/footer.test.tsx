@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
-import { footerItemsSchema, type FooterItem } from 'kehikot-module-protocol'
+import { FOOTER_KINDS, footerItemsSchema, type FooterItem } from 'kehikot-module-protocol'
 
 import { Browser } from '../src/app.tsx'
 import { FOOT, footerItems } from '../src/lib/footer.ts'
@@ -11,8 +11,9 @@ import type { Host, Kept } from '../src/wire/use-kehikot.ts'
 
 /**
  * The old top bar's buttons, in the footer the host draws (protocol 2.38.0) when it says it draws
- * one, and the top bar exactly as before when it does not. The address stays a field on the page:
- * a footer item cannot take typing.
+ * one, and the top bar exactly as before when it does not. With a host that draws a footer field
+ * (2.46.0) the address is in the footer too and the page has no row; with one that draws a footer
+ * but no field, the address stays a field on the page.
  */
 
 afterEach(cleanup)
@@ -103,6 +104,17 @@ describe('the footer it declares', () => {
     expect(items.find((one) => one.id === FOOT.PAGE)).toMatchObject({ text: 'Loading…' })
   })
 
+  test('with a footer field: the address in place of what the page is, growing, with the page as it is shown', () => {
+    const items = footerItems({ url: PAGE, title: 'Fix the thing', canBack: true, canForward: false, loading: false, canSave: true, field: true })
+    expect(footerItemsSchema.safeParse(items).success).toBe(true)
+    expect(items.map((one) => one.id)).toEqual([FOOT.BACK, FOOT.FORWARD, FOOT.RELOAD, FOOT.ADDRESS, FOOT.SAVE])
+    expect(items.find((one) => one.id === FOOT.ADDRESS)).toMatchObject({ kind: 'input', label: 'Address', value: PAGE, grow: true, agents: false })
+    const opening = footerItems({ url: PAGE, title: '', canBack: true, canForward: false, loading: true, canSave: false, field: true, shown: 'https://example.com/' })
+    expect(opening.find((one) => one.id === FOOT.ADDRESS)).toMatchObject({ value: 'https://example.com/', tooltip: 'Loading…' })
+    const blank = footerItems({ url: 'about:blank', title: '', canBack: false, canForward: false, loading: false, canSave: false, field: true })
+    expect(blank.find((one) => one.id === FOOT.ADDRESS)).toMatchObject({ value: '' })
+  })
+
   test('a blank page has nothing to reload and says so', () => {
     const items = footerItems({ url: 'about:blank', title: '', canBack: false, canForward: false, loading: false, canSave: false })
     expect(items.find((one) => one.id === FOOT.PAGE)).toMatchObject({ text: 'No page open' })
@@ -121,6 +133,48 @@ describe('the page', () => {
     expect(screen.getByTestId('address-row')).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull()
+  })
+
+  test('with a host that draws a footer field: the address is in the footer, and the page draws no row', async () => {
+    const s = fakeStream()
+    const { h, last } = host({ footerKinds: [...FOOTER_KINDS] })
+    render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().page?.(state()))
+    await waitFor(() => expect(last().find((one) => one.id === FOOT.ADDRESS)).toMatchObject({ kind: 'input', value: PAGE }))
+    expect(last().some((one) => one.id === FOOT.PAGE)).toBe(false)
+    expect(screen.queryByLabelText('Address')).toBeNull()
+    expect(screen.queryByTestId('address-row')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+
+  test('a host that names footer kinds without the field keeps the address on the page', async () => {
+    const s = fakeStream()
+    const { h, last } = host({ footerKinds: ['text', 'meter', 'switch', 'toggle', 'go', 'run'] })
+    render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    act(() => s.events().page?.(state()))
+    await waitFor(() => expect(last().find((one) => one.id === FOOT.PAGE)).toBeDefined())
+    expect(last().some((one) => one.id === FOOT.ADDRESS)).toBe(false)
+    expect(screen.getByTestId('address-row')).toBeDefined()
+  })
+
+  test('Enter in the footer field opens the address as the old bar did; a bad one is refused with why', async () => {
+    const s = fakeStream()
+    const { h, last } = host({ footerKinds: [...FOOTER_KINDS] })
+    const pressRef = { current: (_: { item: string; value?: string | boolean; text?: string }) => undefined as string | void }
+    render(<Browser host={h} api={fakeApi()} makeStream={s.make} pressRef={pressRef} />)
+    act(() => s.events().page?.(state()))
+    let said: string | void = 'unset'
+    act(() => {
+      said = pressRef.current({ item: FOOT.ADDRESS, text: 'github.com/Jalez/kehikko' })
+    })
+    expect(said).toBeUndefined()
+    expect(s.sent[s.sent.length - 1]).toEqual({ t: 'go', url: 'https://github.com/Jalez/kehikko' })
+    /* The field shows what is being opened at once. */
+    await waitFor(() => expect(last().find((one) => one.id === FOOT.ADDRESS)).toMatchObject({ value: 'https://github.com/Jalez/kehikko' }))
+    const before = s.sent.length
+    expect(pressRef.current({ item: FOOT.ADDRESS })).toBeTruthy()
+    expect(typeof pressRef.current({ item: FOOT.ADDRESS, text: '   ' })).toBe('string')
+    expect(s.sent.length).toBe(before)
   })
 
   test('with a host that does not: the old top bar, and no footer declared', () => {

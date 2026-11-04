@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, Bookmark, Code, Copy, Pencil, RotateCw, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { headerItemsSchema, pickedParts, type HeaderItem, type PressValue } from 'kehikot-module-protocol'
+import { footerDraws, headerItemsSchema, pickedParts, type HeaderItem, type PressValue } from 'kehikot-module-protocol'
 import { Cover, useServerStanding } from 'kehikot-module-protocol/client/react'
 
 import { Button } from '@/components/ui/button'
@@ -73,7 +73,7 @@ export function headerItems({ saved, follow, canSave, view = 'browser' }: { save
   return headerItemsSchema.parse(items)
 }
 
-type Press = { item: string; value?: PressValue }
+type Press = { item: string; value?: PressValue; text?: string }
 type Panel = 'endpoint' | 'saved' | null
 
 const NO_PAGE: PageState = { url: BLANK, title: '', canBack: false, canForward: false, loading: false }
@@ -455,7 +455,7 @@ export function Browser({
 
   /* ---------------- Presses, from the host's header and from this page. ---------------- */
   const press = useCallback(
-    ({ item, value }: Press): string | void => {
+    ({ item, value, text }: Press): string | void => {
       if (item === 'saved') {
         const one = saved.find((s) => s.id === value)
         if (!one) return 'That saved address is gone.'
@@ -499,6 +499,14 @@ export function Browser({
         stream.send({ t: item })
         return
       }
+      /* The footer's address field (protocol 2.46.0): Enter there is the old bar's Enter. */
+      if (item === FOOT.ADDRESS) {
+        if (typeof text !== 'string') return 'Say the address to open.'
+        const address = normaliseAddress(text)
+        if (!address.ok) return address.why
+        go(text)
+        return
+      }
       if (item === FOOT.STOP) {
         stream.send({ t: 'stop' })
         setOpening(null)
@@ -515,10 +523,16 @@ export function Browser({
   const { header } = host
   useEffect(() => header(items), [header, items])
 
-  /* The footer the host draws, when it draws one (2.38.0); otherwise the page's own top bar. */
-  const drawsFooter = host.where === 'hosted' && host.drawsFooter === true
+  /* The footer the host draws, when it draws one (2.38.0); otherwise the page's own top bar. With a
+     host that draws a footer field (2.46.0) the address is in the footer too, and the page has no row. */
+  const hosted = host.where === 'hosted'
+  const drawsFooter = hosted && host.drawsFooter === true
+  const drawsField = hosted && footerDraws({ footer: host.drawsFooter ?? null, footerKinds: host.footerKinds ?? null }, 'input')
+  const shownUrl = addressShown(opening, page.url)
   const footerSaid = drawsFooter
-    ? JSON.stringify(footerItems({ url: page.url, title: page.title, canBack: page.canBack, canForward: page.canForward, loading: busy, canSave }))
+    ? JSON.stringify(
+        footerItems({ url: page.url, title: page.title, canBack: page.canBack, canForward: page.canForward, loading: busy, canSave, field: drawsField, shown: shownUrl }),
+      )
     : null
   const { footer } = host
   useEffect(() => {
@@ -537,12 +551,12 @@ export function Browser({
 
   return (
     <div className="flex h-screen flex-col text-sm">
-      {drawsFooter ? (
-        <AddressField shownUrl={addressShown(opening, page.url)} onGo={go} compact />
+      {drawsField ? null : drawsFooter ? (
+        <AddressField shownUrl={shownUrl} onGo={go} compact />
       ) : (
         <Bar
           page={page}
-          shownUrl={addressShown(opening, page.url)}
+          shownUrl={shownUrl}
           stream={stream}
           onGo={go}
           onSave={() => void saveHere().then((why) => why && setSaid(why))}
@@ -664,7 +678,8 @@ function Bar({
 
 /**
  * The address, typed. In the old top bar beside the buttons; alone along the top when the host
- * draws the footer, since a footer item cannot take typing (`compact`: a slimmer row).
+ * draws a footer but no footer field (protocol 2.38.0 to 2.45.0; `compact`: a slimmer row). A host
+ * that draws a footer field has the address there instead (`footer.ts`).
  */
 function AddressField({ shownUrl, onGo, compact = false }: { shownUrl: string; onGo(typed: string): boolean; compact?: boolean }) {
   const [draft, setDraft] = useState<string | null>(null)
