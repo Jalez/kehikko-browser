@@ -68,6 +68,10 @@ address; nothing here is Kehikot-specific).
   its page opens (the URL comes from the host's shared tracker reading,
   `tracker.get`). View › Follow picked issues, and the pinned button in the
   container header, stop and resume that.
+- **Keeps its view per kehikko.** View › Show (the page, the Console, the
+  Walkthroughs, Before and after) and Follow picked issues are kept by the host
+  for this container — this module on this kehikko — and are back after a
+  restart.
 - **Opens addresses handed to the canvas.** Another module's `address.open`
   (protocol 2.16.0), or an agent's `open_address` at the host's door, puts a web
   address in `context.address`; Browser says `reacts: ['address']`, so the host

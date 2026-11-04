@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Bookmark, Code, Copy, Pencil, RotateCw, Trash2, 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { footerDraws, headerItemsSchema, pickedParts, type HeaderItem, type PressValue } from 'kehikot-module-protocol'
-import { Cover, useServerStanding } from 'kehikot-module-protocol/client/react'
+import { Cover, useKept, useServerStanding } from 'kehikot-module-protocol/client/react'
 
 import { Button } from '@/components/ui/button'
 import { HeaderMenus } from '@/components/header-menus'
@@ -21,6 +21,8 @@ import { Sheet } from '@/view/sheet'
 import { api as realApi, type Api, type Endpoint } from '@/wire/api'
 import { Stream, type ConsoleEntry, type Dialog, type Frame, type PageState, type Status } from '@/wire/stream'
 import { useKehikot, type Host } from '@/wire/use-kehikot'
+
+const isView = (value: unknown): value is View => VIEWS.some((one) => one.id === value)
 
 /**
  * What this module puts in its container's header. The host draws them (View,
@@ -125,7 +127,8 @@ export function Browser({
   const [handed, setHanded] = useState<Handed | null>(null)
   const [saved, setSaved] = useState<Saved[]>([])
   const [panel, setPanel] = useState<Panel>(null)
-  const [view, setView] = useState<View>('browser')
+  /* Which view is in front: kept by the host for this container and read on every render, so another kehikko brings its own. */
+  const [view, setView] = useKept<View>(host, 'view', 'browser', isView)
   const [focus, setFocus] = useState<string | null>(null)
   const [lines, setLines] = useState<{ entries: ConsoleEntry[]; dropped: number }>({ entries: [], dropped: 0 })
   const frames = useRef<((frame: Frame) => void) | null>(null)
@@ -321,7 +324,7 @@ export function Browser({
 
   /* ---------------- Following picks. ---------------- */
   const follow = host.kept?.follow ?? true
-  const setFollow = useCallback((on: boolean) => host.remember({ ...(host.kept ?? {}), follow: on }), [host])
+  const setFollow = useCallback((on: boolean) => host.remember({ ...(host.read().kept ?? {}), follow: on }), [host])
   const selection = host.selection.join(' ')
   const lastSelection = useRef<string | null>(null)
   const waiting = useRef<string | null>(null)
@@ -437,6 +440,13 @@ export function Browser({
      kept by the host for this module, so a reload does not open it again. After the place's effect, so
      that one has counted `opened` before this bumps it. */
   const actedAt = useRef<string | null>(null)
+  /* Each kehikko has its own hand-overs and its own kept `addressAt`: read again when the kehikko changes. */
+  const actedOn = useRef<string | null | undefined>(undefined)
+  const kehikkoKey = host.kehikko?.key ?? null
+  if (actedOn.current !== kehikkoKey) {
+    actedOn.current = kehikkoKey
+    actedAt.current = null
+  }
   if (actedAt.current === null && host.kept?.addressAt) actedAt.current = host.kept.addressAt
   const addressKey = host.address ? `${host.address.at ?? ''}|${host.address.url}` : ''
   useEffect(() => {
@@ -444,7 +454,7 @@ export function Browser({
     const next = addressToOpen(host.address, actedAt.current)
     if (!next) return
     actedAt.current = next.at ?? next.url
-    if (next.at) host.remember({ ...(host.kept ?? {}), addressAt: next.at })
+    if (next.at) host.remember({ ...(host.read().kept ?? {}), addressAt: next.at })
     opened.current += 1
     setPanel(null)
     setView('browser')

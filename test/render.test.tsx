@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
-import { Browser, headerItems } from '../src/app.tsx'
+import { headerItems } from '../src/app.tsx'
+import { Browser } from './hosted.tsx'
 import type { Saved } from '../src/lib/saved.ts'
 import type { Api, Endpoint } from '../src/wire/api.ts'
 import type { Stream, StreamEvents } from '../src/wire/stream.ts'
