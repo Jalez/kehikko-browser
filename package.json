@@ -19,7 +19,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#97042604a12f41f0a829641af1e6240f5a3d49d6",
+    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v2.46.0",
     "lucide-react": "^1.33.0",
     "playwright-core": "^1.64.1",
     "react": "^19.2.8",
