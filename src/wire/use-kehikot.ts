@@ -30,7 +30,7 @@ export interface Host
   >,
     /* The footer (2.38.0), whether the page is on screen (2.45.0) and which footer kinds the host draws (2.46.0):
        optional, so a screen renders in a test without them. */
-    Partial<Pick<ProtocolHost<Kept>, 'footer' | 'drawsFooter' | 'visible' | 'footerKinds'>> {
+    Partial<Pick<ProtocolHost<Kept>, 'footer' | 'drawsFooter' | 'visible' | 'footerKinds' | 'ready'>> {
   /** When the host's tracker reading last changed (`context.tracker.at`); a pending ref is asked again when it moves. */
   trackerAt: string | null
 }
