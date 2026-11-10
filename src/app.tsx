@@ -104,6 +104,9 @@ export const OPENING_AT_MOST = LOADING_AT_MOST
 export function App() {
   const pressRef = useRef<(press: Press) => string | void>(() => 'Not ready yet.')
   const host = useKehikot({ onPress: (press) => pressRef.current(press) })
+  /* Nothing to read before the page is drawn: the host's cover can come off at once. */
+  const { ready } = host
+  useEffect(() => ready?.(), [ready])
   return <Browser host={host} pressRef={pressRef} />
 }
 

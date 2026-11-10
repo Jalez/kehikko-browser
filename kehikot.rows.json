@@ -1,0 +1,173 @@
+[
+  {
+    "name": "a page open",
+    "header": [
+      {
+        "kind": "switch",
+        "id": "view",
+        "label": "Show",
+        "agents": true,
+        "options": [
+          {
+            "id": "browser",
+            "label": "Browser"
+          },
+          {
+            "id": "console",
+            "label": "Console"
+          },
+          {
+            "id": "walkthroughs",
+            "label": "Walkthroughs"
+          },
+          {
+            "id": "shots",
+            "label": "Before and after"
+          }
+        ],
+        "value": "browser"
+      },
+      {
+        "kind": "go",
+        "id": "saved",
+        "label": "Saved addresses",
+        "agents": true,
+        "options": [
+          {
+            "id": "a",
+            "label": "A"
+          },
+          {
+            "id": "b",
+            "label": "B"
+          }
+        ]
+      },
+      {
+        "kind": "toggle",
+        "id": "follow",
+        "label": "Follow picked issues",
+        "agents": true,
+        "checked": true
+      },
+      {
+        "kind": "run",
+        "id": "pin",
+        "label": "Stop following picks",
+        "icon": "link",
+        "agents": true,
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false,
+        "pinned": true
+      },
+      {
+        "kind": "run",
+        "id": "manage",
+        "label": "Edit saved addresses…",
+        "icon": "pencil",
+        "group": "Addresses",
+        "agents": false,
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false
+      },
+      {
+        "kind": "run",
+        "id": "endpoint",
+        "label": "Playwright endpoint…",
+        "icon": "code",
+        "group": "Playwright",
+        "agents": false,
+        "tool": "cdp_endpoint",
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false
+      },
+      {
+        "kind": "run",
+        "id": "devtools",
+        "label": "Open DevTools",
+        "icon": "external",
+        "group": "Playwright",
+        "agents": false,
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false
+      }
+    ],
+    "footer": [
+      {
+        "kind": "run",
+        "id": "back",
+        "label": "Back",
+        "icon": "chevron-left",
+        "agents": false,
+        "tool": "back",
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false,
+        "align": "start",
+        "optional": false
+      },
+      {
+        "kind": "run",
+        "id": "forward",
+        "label": "Forward",
+        "icon": "chevron-right",
+        "agents": false,
+        "tool": "forward",
+        "state": "idle",
+        "result": null,
+        "disabled": "There is no page after this one.",
+        "confirm": false,
+        "align": "start",
+        "optional": false
+      },
+      {
+        "kind": "run",
+        "id": "reload",
+        "label": "Reload",
+        "icon": "refresh",
+        "agents": false,
+        "tool": "reload",
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false,
+        "align": "start",
+        "optional": false
+      },
+      {
+        "kind": "input",
+        "id": "address",
+        "label": "Address",
+        "value": "https://a.dev",
+        "placeholder": "Type an address: github.com/…, localhost:5173",
+        "grow": true,
+        "agents": false,
+        "align": "start",
+        "optional": false,
+        "tooltip": "A"
+      },
+      {
+        "kind": "run",
+        "id": "save",
+        "label": "Save address",
+        "icon": "save",
+        "agents": true,
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false,
+        "align": "end",
+        "optional": true
+      }
+    ]
+  }
+]
