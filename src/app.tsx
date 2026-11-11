@@ -343,7 +343,7 @@ export function Browser({
     if (!refs.length) return
     /* Said at once, before the host is asked: the address follows when the reading names it. */
     setOpening(pickedOpening(openingRef.current, refs[0]!, pageRef.current.url))
-    let reading: { rows?: unknown; missing?: unknown } | null = null
+    let reading: { rows?: unknown; missing?: unknown; sources?: unknown } | null = null
     try {
       reading = (await request('tracker.get', { refs })) as typeof reading
     } catch {
