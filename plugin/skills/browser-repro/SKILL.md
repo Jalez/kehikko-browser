@@ -20,7 +20,7 @@ Steps:
 4. **Verdict.** Call `repro_end` with `reproduced`, `not-reproduced` or `unclear`, and one or two sentences on why. A step is done when its `repro_step` is recorded; the repro is done when `repro_end` is.
 5. **Tell the person**, plainly and first: "Reproduced." / "Did not reproduce." / "Unclear." — then the step where it happened, and the console error or failed request that goes with it if there is one. Call `show_view` with view `console` so they can see the console. Then offer, as two choices:
    - post the evidence as a comment on the issue: the text is in the `comment.md` `repro_end` named; on their yes, run `gh issue comment <n> --body-file <that path>` (or `glab issue note <n> --message "$(cat <that path>)"`), which Claude Code asks them about;
-   - start a Factory job for the fix: they type `/factory Fix <issue title> --issue <ref>` themselves.
+   - have an agent job or a build module start the fix: that is the person's to start.
 
 Rules that hold throughout:
 

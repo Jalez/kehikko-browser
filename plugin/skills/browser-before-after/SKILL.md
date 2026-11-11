@@ -25,7 +25,7 @@ If the answer above does not begin with "Browser:", or you have no `mcp__browser
 
 1. Call `shots_post_plan` with the project and ref. It refuses until the person OK'd; it then lists the exact gh or glab commands. Run them one at a time, exactly as written: they go through the person's own gh/glab, and Claude Code asks them before each one.
 2. Call `shots_post_body` with what the last command printed as `current` (and, for GitLab, each picture's file name mapped to the `url` glab answered), and run the edit command it returns.
-3. Call `shots_posted` with where it went. Tell the person in one line; Review's Before / after view now shows the pairs from the description.
+3. Call `shots_posted` with where it went. Tell the person in one line; a review module's Before / after view, if there is one, now shows the pairs from the description.
 
 Rules that hold throughout:
 
