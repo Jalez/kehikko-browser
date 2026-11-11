@@ -1,6 +1,7 @@
 import { readTrackerRef } from 'kehikot-module-protocol'
 
 import { allowedUrl } from './address.ts'
+import { pageFor } from './forge.ts'
 
 /**
  * Which page a canvas pick names.
@@ -40,31 +41,52 @@ export function refsToAsk(selection: readonly string[]): string[] {
   return out
 }
 
+interface Source {
+  tracker?: unknown
+  host?: unknown
+  repo?: unknown
+  default?: unknown
+}
+
 /**
- * A page for a ref that names its own repository on GitHub, needing no reading:
- * `gh:owner/repo#12` → https://github.com/owner/repo/issues/12 (GitHub sends an
- * issue number that is a pull request on to the pull request). Short spellings
- * (`gh#12`) mean the project's default repository, which only the host knows.
+ * A page for a ref, needing no row. GitHub, naming its repository: `gh:owner/repo#12` →
+ * https://github.com/owner/repo/issues/12 (GitHub sends an issue number that is a pull request on to
+ * the pull request). GitLab: `!7` → `https://<host>/<group>/<project>/-/merge_requests/7`, `#7` →
+ * `/-/issues/7`, the host and project taken from the host's `sources` (the reading's list of
+ * repositories): the one named by a qualified ref (`gl:group/project!7`), else the tracker's default
+ * one, so a self-hosted instance works. No source to say where → null. A short GitHub spelling
+ * (`gh#12`) means the project's default repository, which only the host knows.
  */
-export function directUrl(ref: string): string | null {
+export function directUrl(ref: string, sources: readonly unknown[] = []): string | null {
   const name = readTrackerRef(ref)
-  if (!name || name.tracker !== 'github' || !name.repo) return null
-  return `https://github.com/${name.repo}/issues/${name.number}`
+  if (!name) return null
+  if (name.tracker === 'github') {
+    if (!name.repo) return null
+    return pageFor({ forge: 'github', host: 'github.com', path: name.repo }, 'either', name.number)
+  }
+  const all = sources.filter((one): one is Source => !!one && typeof one === 'object' && (one as Source).tracker === 'gitlab')
+  const pick = name.repo
+    ? all.find((one) => one.repo === name.repo)
+    : (all.find((one) => one.default === true) ?? (all.length === 1 ? all[0] : undefined))
+  if (!pick || typeof pick.host !== 'string' || typeof pick.repo !== 'string') return null
+  const url = pageFor({ forge: 'gitlab', host: pick.host, path: pick.repo }, name.kind === 'change' ? 'change' : 'issue', name.number)
+  return allowedUrl(url) ? url : null
 }
 
 /** What to open for a selection, given the host's answer to `tracker.get { refs }` (or null when it had none). */
-export function urlForSelection(selection: readonly string[], reading: { rows?: unknown; missing?: unknown } | null): Followed {
+export function urlForSelection(selection: readonly string[], reading: { rows?: unknown; missing?: unknown; sources?: unknown } | null): Followed {
   const refs = refsToAsk(selection)
   if (refs.length === 0) {
     return { kind: 'none', why: selection.length ? 'Nothing picked is an issue or a pull request.' : 'Nothing is picked.' }
   }
   const rows = Array.isArray(reading?.rows) ? (reading.rows as Row[]) : []
   const missing = Array.isArray(reading?.missing) ? (reading.missing as Missing[]) : []
+  const sources = Array.isArray(reading?.sources) ? (reading.sources as unknown[]) : []
   const pending: string[] = []
   for (const ref of refs) {
     const row = rows.find((one) => one && one.ref === ref)
     if (row && typeof row.url === 'string' && allowedUrl(row.url) && row.url !== 'about:blank') return { kind: 'open', ref, url: row.url }
-    const direct = directUrl(ref)
+    const direct = directUrl(ref, sources)
     if (direct) return { kind: 'open', ref, url: direct }
     if (missing.some((one) => one && one.ref === ref && one.reason === 'pending')) pending.push(ref)
   }

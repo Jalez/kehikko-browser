@@ -39,6 +39,28 @@ describe('a pick, as a page', () => {
     expect(urlForSelection(['gh:Jalez/kehikko#12'], null)).toMatchObject({ kind: 'open', url: 'https://github.com/Jalez/kehikko/issues/12' })
   })
 
+  test('a GitLab ref with no usable row gets its address from the host’s sources', () => {
+    const com = { tracker: 'gitlab', host: 'gitlab.com', repo: 'group/sub/project', default: true }
+    const self = { tracker: 'gitlab', host: 'git.example.org', repo: 'team/app', default: true }
+    const gh = { tracker: 'github', host: 'github.com', repo: 'Jalez/kehikko', default: true }
+    const at = (ref: string, sources: unknown[], rows: unknown[] = []) => urlForSelection([ref], { rows, missing: [], sources })
+    expect(at('!4360', [gh, com])).toMatchObject({ kind: 'open', url: 'https://gitlab.com/group/sub/project/-/merge_requests/4360' })
+    expect(at('#12', [gh, com])).toMatchObject({ kind: 'open', url: 'https://gitlab.com/group/sub/project/-/issues/12' })
+    expect(at('!7', [self])).toMatchObject({ url: 'https://git.example.org/team/app/-/merge_requests/7' })
+    expect(at('gl#7', [self])).toMatchObject({ url: 'https://git.example.org/team/app/-/issues/7' })
+    expect(at('gl:team/app!9', [com, { ...self, default: false }])).toMatchObject({ url: 'https://git.example.org/team/app/-/merge_requests/9' })
+    expect(at('gl:team/app#9', [com, { ...self, default: false }])).toMatchObject({ url: 'https://git.example.org/team/app/-/issues/9' })
+    /* A row with a page still wins; no source to say where means no page. */
+    expect(at('!7', [self], [{ ref: '!7', url: 'https://git.example.org/other/-/merge_requests/7' }])).toMatchObject({ url: 'https://git.example.org/other/-/merge_requests/7' })
+    expect(at('!7', [gh]).kind).toBe('none')
+    expect(at('gl:other/repo!7', [self]).kind).toBe('none')
+  })
+
+  test('GitHub addresses are unchanged beside GitLab sources', () => {
+    expect(directUrl('gh:Jalez/kehikko#12', [{ tracker: 'gitlab', host: 'gitlab.com', repo: 'a/b', default: true }])).toBe('https://github.com/Jalez/kehikko/issues/12')
+    expect(directUrl('gh#12', [{ tracker: 'github', host: 'github.com', repo: 'Jalez/kehikko', default: true }])).toBeNull()
+  })
+
   test('nothing picked, or nothing that is a ref, opens nothing and says why', () => {
     expect(urlForSelection([], null)).toEqual({ kind: 'none', why: 'Nothing is picked.' })
     expect(urlForSelection(['hello'], null)).toEqual({ kind: 'none', why: 'Nothing picked is an issue or a pull request.' })
