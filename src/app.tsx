@@ -581,7 +581,7 @@ export function Browser({
   if (server === 'stale') return <Cover state="stale" name="Browser" onRetry={() => location.reload()} />
 
   return (
-    <div className="flex h-screen flex-col text-sm">
+    <div data-kehikot-page className="flex h-screen flex-col text-sm">
       {drawsField ? null : drawsFooter ? (
         <AddressField shownUrl={shownUrl} onGo={go} compact />
       ) : (
