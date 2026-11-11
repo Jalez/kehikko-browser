@@ -14,8 +14,7 @@ import { PREFERRED_PORT } from './manifest.ts'
  *
  * Each is ONE file, `plugin/skills/<name>/SKILL.md`, which is a template: where it says
  * `{{origin}}` this module writes the origin it is really serving on (`serveFrom`, from the port
- * Vite ended up bound to), and where it says `{{version}}` the skill's version. The same scheme as
- * the Claude and Factory modules' skills.
+ * Vite ended up bound to), and where it says `{{version}}` the skill's version.
  *
  *  - **A host** asks for the text at `skillPath(name)`, shows it, and installs it on the person's
  *    press (Kehikot's Skills window). This module installs nothing.

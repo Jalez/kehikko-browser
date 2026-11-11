@@ -42,8 +42,8 @@ export function startOpening(now: Opening | null, next: { url: string; label: st
 /**
  * Whether a navigation to `url` is already on its way, so asking again would
  * only restart it: a pick resolving to the address a hand-over is opening, or
- * a hand-over of the address a pick is opening. One click in References does
- * both. Two hand-overs, or a typed address, always go.
+ * a hand-over of the address a pick is opening. One click in a module listing refs
+ * can do both. Two hand-overs, or a typed address, always go.
  */
 export function alreadyOpening(now: Opening | null, url: string, from: Opening['from']): boolean {
   if (!now || now.url !== url) return false

@@ -179,12 +179,12 @@ describe('the page', () => {
       },
     })
     const remembered: unknown[] = []
-    const handed = { url: 'https://example.com/design', title: 'Design', intent: 'show' as const, by: 'kehikot.flows', at: 't1' }
+    const handed = { url: 'https://example.com/design', title: 'Design', intent: 'show' as const, by: 'kehikot.example', at: 't1' }
     const h = host({ remember: (kept: Kept) => void remembered.push(kept) })
     const { rerender } = render(<Browser host={h} api={api} makeStream={s.make} />)
     await act(async () => rerender(<Browser host={{ ...h, address: handed }} api={api} makeStream={s.make} />))
     await waitFor(() => expect(s.sent).toContainEqual({ t: 'go', url: 'https://example.com/design' }))
-    expect(screen.getByTestId('said').textContent).toContain('Opened “Design”, handed over by kehikot.flows.')
+    expect(screen.getByTestId('said').textContent).toContain('Opened “Design”, handed over by kehikot.example.')
     expect(remembered).toContainEqual({ addressAt: 't1' })
 
     /* The same context again is not a second request; a new at is. */
@@ -200,7 +200,7 @@ describe('the page', () => {
 
   test('an address already acted on before a reload is not opened again', async () => {
     const s = fakeStream()
-    const handed = { url: 'https://example.com/design', intent: 'show' as const, by: 'kehikot.flows', at: 't1' }
+    const handed = { url: 'https://example.com/design', intent: 'show' as const, by: 'kehikot.example', at: 't1' }
     render(<Browser host={host({ kept: { addressAt: 't1' }, address: handed })} api={fakeApi()} makeStream={s.make} />)
     await new Promise((r) => setTimeout(r, 20))
     expect(s.sent.some((m) => m.t === 'go')).toBe(false)
@@ -210,7 +210,7 @@ describe('the page', () => {
     const s = fakeStream()
     let answer: (visit: { url: string; title: string; at: string; key: string }) => void = () => {}
     const api = fakeApi({ place: () => new Promise((resolve) => (answer = resolve)) })
-    const handed = { url: 'https://example.com/design', intent: 'show' as const, by: 'kehikot.flows', at: 't1' }
+    const handed = { url: 'https://example.com/design', intent: 'show' as const, by: 'kehikot.example', at: 't1' }
     render(<Browser host={host({ address: handed })} api={api} makeStream={s.make} />)
     await waitFor(() => expect(s.sent).toContainEqual({ t: 'go', url: 'https://example.com/design' }))
     await act(async () => answer({ url: 'https://example.org/remembered', title: '', at: '', key: 'project' }))

@@ -244,7 +244,7 @@ export function githubImage(repo: Repo, path: string): string {
 
 /**
  * The markdown that goes in the description: a `| Before | After |` table per screen, each image's
- * alt text starting "Before" or "After", which is how Review's Before / after view labels them.
+ * alt text starting "Before" or "After", which is how a page showing the change can pair them.
  * `urlOf` is each picture's address on the forge.
  */
 export function descriptionBlock(set: ShotSet, urlOf: (file: string) => string | null): string {

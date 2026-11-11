@@ -111,7 +111,7 @@ describe('what is being opened, as a value', () => {
     expect(addressShown(moved, `${MR}/diffs`)).toBe(`${MR}/diffs`)
   })
 
-  test('one click in References is one navigation; two hand-overs or a typed address always go', () => {
+  test('one click in a ref list is one navigation; two hand-overs or a typed address always go', () => {
     const handed = startOpening(null, { url: MR, label: null, from: 'handed', before: HOME })
     expect(alreadyOpening(handed, MR, 'pick')).toBe(true)
     expect(alreadyOpening(handed, MR, 'handed')).toBe(false)
@@ -128,7 +128,7 @@ describe('a hand-over', () => {
     const { h } = host()
     const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
     act(() => s.events().page?.(page(HOME)))
-    const handed = { url: MR, title: 'Fix the thing', intent: 'show' as const, by: 'kehikot.references', at: 't1' }
+    const handed = { url: MR, title: 'Fix the thing', intent: 'show' as const, by: 'kehikot.example', at: 't1' }
     act(() => rerender(<Browser host={{ ...h, address: handed }} api={fakeApi()} makeStream={s.make} />))
     /* No page event yet: the engine has not heard from the forge. */
     expect(bar()).toBe(MR)
@@ -152,7 +152,7 @@ describe('a hand-over', () => {
       const { h, answer } = host({}, false)
       const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
       act(() => s.events().page?.(page(HOME)))
-      const handed = { url: MR, intent: 'show' as const, by: 'kehikot.references', at: 't1' }
+      const handed = { url: MR, intent: 'show' as const, by: 'kehikot.example', at: 't1' }
       if (order === 'handed first') {
         act(() => rerender(<Browser host={{ ...h, address: handed, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
         await act(async () => answer())
@@ -245,7 +245,7 @@ describe('a pick', () => {
 describe('the time a pick takes in this page', () => {
   /*
    * Measured: pick → `tracker.get` asked → answered (a hit, as for every ref
-   * References shows) → `go` sent. With the host answering at once, everything
+   * a ref list shows) → `go` sent. With the host answering at once, everything
    * before the engine is this page's own work; the rest is the forge's.
    */
   test('a hit is opened in the same turn it is answered; nothing waits in between', async () => {
