@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { MODULE_ID, manifestSchema, moduleFolder } from 'kehikot-module-protocol'
+import { MODULE_FOLDERS, MODULE_ID, PAGE_VIEWER, manifestSchema, moduleFolder, serviceDescriptor } from 'kehikot-module-protocol'
 
 import { ID, MANIFEST, PREFERRED_PORT } from '../manifest.ts'
 
@@ -27,5 +27,11 @@ describe('the manifest', () => {
   test('prefers a port on the ten-apart grid', () => {
     expect(Number.isInteger(PREFERRED_PORT)).toBe(true)
     expect(PREFERRED_PORT % 10).toBe(0)
+  })
+
+  test('provides page.viewer, naming the tool that opens { url }, and declares its own folder', () => {
+    expect(serviceDescriptor(PAGE_VIEWER, MANIFEST.services?.[PAGE_VIEWER])).toEqual({ name: 'Browser', tool: 'navigate' })
+    const folders = serviceDescriptor(MODULE_FOLDERS, MANIFEST.services?.[MODULE_FOLDERS])
+    expect(folders?.folders.map((one) => [one.folder, one.derived])).toEqual([[moduleFolder(ID), false]])
   })
 })

@@ -8,7 +8,7 @@ const address = (over: Partial<SharedAddress> = {}): SharedAddress => ({
   url: 'https://example.com/design',
   title: 'Design',
   intent: 'show',
-  by: 'kehikot.flows',
+  by: 'kehikot.example',
   at: '2026-10-23T10:00:00.000Z',
   ...over,
 })
@@ -24,7 +24,7 @@ describe('addressToOpen', () => {
     expect(addressToOpen(address(), null)).toEqual({
       url: 'https://example.com/design',
       title: 'Design',
-      by: 'kehikot.flows',
+      by: 'kehikot.example',
       at: '2026-10-23T10:00:00.000Z',
     })
   })
@@ -49,8 +49,8 @@ describe('addressToOpen', () => {
   })
 
   test('the line it says', () => {
-    expect(handedSaid({ url: 'https://example.com/design', title: 'Design', by: 'kehikot.flows', at: null })).toBe(
-      'Opened “Design”, handed over by kehikot.flows.',
+    expect(handedSaid({ url: 'https://example.com/design', title: 'Design', by: 'kehikot.example', at: null })).toBe(
+      'Opened “Design”, handed over by kehikot.example.',
     )
     expect(handedSaid({ url: 'https://example.com/design', title: null, by: null, at: null })).toBe('Opened “example.com/design”.')
   })

@@ -8,8 +8,10 @@ import * as manifest from '../manifest.ts'
    "Inbox" is a host term and may stay. */
 const OTHERS = ['Journeys', 'References', 'Checklist', 'Paper', 'Slides', 'Citations', 'Notes', 'Learning', 'Source', 'Diff', 'Review', 'Explorer', 'Terminal', 'History', 'Orchestrator', 'Browser', 'Editor', 'Factory', 'Kanban', 'Monitor', 'Queue', 'Worktrees', 'Flows', 'Screenplay', 'Codex', 'Antigravity', 'OpenCode', 'Vibe'].filter((n) => n !== 'Browser')
 const ROOT = join(import.meta.dir, '..')
-const names = new RegExp(`\\b(${OTHERS.join('|')})\\b|kehikot\\.(${OTHERS.map((n) => n.toLowerCase()).join('|')})\\b|mcp__(${OTHERS.map((n) => n.toLowerCase()).join('|')})__`)
-const ids = new RegExp(`kehikot\\.(${OTHERS.map((n) => n.toLowerCase()).join('|')})\\b`)
+const names = new RegExp(`\\b(${OTHERS.join('|')})\\b|(kehikot|roadmap)\\.(${OTHERS.map((n) => n.toLowerCase()).join('|')})\\b|mcp__(${OTHERS.map((n) => n.toLowerCase()).join('|')})__|\\.kehikot/(${OTHERS.map((n) => n.toLowerCase()).join('|')})\\b`)
+const lower = OTHERS.map((n) => n.toLowerCase()).join('|')
+/* Another module's id (either spelling), its MCP tools' prefix or its folder under `.kehikot/`. */
+const ids = new RegExp(`(kehikot|roadmap)\\.(${lower})\\b|mcp__(${lower})__|\\.kehikot/(${lower})\\b`)
 
 /* Lines where a capitalised everyday word is only a word, not a module. */
 const PLAIN: string[] = []
@@ -40,5 +42,15 @@ describe('no module names another', () => {
       })
       expect(lines.filter((line) => ids.test(line))).toEqual([])
     }
+  })
+
+  test('the README', () => {
+    expect(found(read('README.md'))).toEqual([])
+  })
+
+  test('no code names another module by id, tool prefix or folder', () => {
+    const files = Array.from(new Bun.Glob('**/*.{ts,tsx,json}').scanSync({ cwd: ROOT })).filter((path) => !/^(node_modules|test|dist)\//.test(path) && !path.endsWith('bun.lock'))
+    const hits = files.flatMap((path) => read(path).split('\n').filter((line) => ids.test(line)).map((line) => `${path}: ${line.trim()}`))
+    expect(hits).toEqual([])
   })
 })

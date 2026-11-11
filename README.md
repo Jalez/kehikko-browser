@@ -103,14 +103,14 @@ Each is typed by you; an agent cannot start one.
   `/browser-before-after post <ref>`, or press OK to post there. The pictures
   then go into the description through your own gh or glab, and Claude Code
   asks you before each command. On GitHub they are kept on a `kehikot-shots`
-  branch of the repository, never on the change's own branch. Review's Before /
-  after view reads them from the description.
+  branch of the repository, never on the change's own branch. Each picture's
+  alt text starts with "Before" or "After", so a page that shows the change
+  can pair them.
 - **`/browser-repro <issue>`**: the agent reads the issue's steps and follows
   them in the Browser, outlined as it goes. Each step keeps what was done, what
   happened, a screenshot, and the console errors and failed requests since the
   step before. It tells you plainly whether the bug reproduced, then offers to
-  post the evidence as a comment on the issue (only on your yes) or to start a
-  Factory job with `/factory`.
+  post the evidence as a comment on the issue (only on your yes).
 - **`/browser-open [what]`**: the picked issue, pull request or merge request
   (or a ref you name: `#12`, `!7`, `PR 41`, `owner/repo#5`) on its forge, read
   from the project's git remotes; or documentation: the project's own docs, or

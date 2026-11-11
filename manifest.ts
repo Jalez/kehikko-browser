@@ -73,6 +73,16 @@ export const DECLARED: Manifest = manifestSchema.parse({
     prompt: false,
   },
   health: '/healthz',
+  /* What this module provides to others (protocol 2.85.0), found through `services.find`, never by id.
+     page.viewer: it shows web pages, and `navigate` ({ url }) opens one. module.folders: it is the only
+     writer of `.kehikot/browser/`. */
+  services: {
+    'page.viewer': { name: 'Browser', tool: 'navigate' },
+    'module.folders': {
+      name: 'Browser',
+      folders: [{ folder: 'browser', says: 'Saved addresses, the page open per part, and walkthroughs, repros and before/after shots with their screenshots.' }],
+    },
+  },
 })
 
 /** The manifest as declared here, without the skills (see `MANIFEST` in doors.ts for what is served). */

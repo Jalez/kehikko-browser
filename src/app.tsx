@@ -273,8 +273,8 @@ export function Browser({
   /**
    * Open an address. `from` says who asked: a pick does not send a second
    * navigation to an address already being opened, and a hand-over does not
-   * send one to an address a pick is already opening (References hands over
-   * the address AND picks the ref with one click). The address bar shows it at
+   * send one to an address a pick is already opening (a module listing refs may hand over
+   * the address AND pick the ref with one click). The address bar shows it at
    * once; the engine's committed address replaces it, redirect included.
    */
   const go = useCallback(
