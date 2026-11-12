@@ -16,13 +16,14 @@ import { pageFor } from './forge.ts'
 export const ASK_AT_MOST = 16
 
 export type Followed =
-  | { kind: 'open'; ref: string; url: string }
+  | { kind: 'open'; ref: string; url: string; title?: string }
   | { kind: 'pending'; refs: string[] }
   | { kind: 'none'; why: string }
 
 interface Row {
   ref?: unknown
   url?: unknown
+  title?: unknown
 }
 interface Missing {
   ref?: unknown
@@ -85,9 +86,10 @@ export function urlForSelection(selection: readonly string[], reading: { rows?: 
   const pending: string[] = []
   for (const ref of refs) {
     const row = rows.find((one) => one && one.ref === ref)
-    if (row && typeof row.url === 'string' && allowedUrl(row.url) && row.url !== 'about:blank') return { kind: 'open', ref, url: row.url }
+    const title = row && typeof row.title === 'string' && row.title.trim() ? { title: row.title.trim() } : {}
+    if (row && typeof row.url === 'string' && allowedUrl(row.url) && row.url !== 'about:blank') return { kind: 'open', ref, url: row.url, ...title }
     const direct = directUrl(ref, sources)
-    if (direct) return { kind: 'open', ref, url: direct }
+    if (direct) return { kind: 'open', ref, url: direct, ...title }
     if (missing.some((one) => one && one.ref === ref && one.reason === 'pending')) pending.push(ref)
   }
   if (pending.length) return { kind: 'pending', refs: pending }

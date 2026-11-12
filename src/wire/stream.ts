@@ -152,8 +152,11 @@ export class Stream {
     }
   }
 
-  send(message: Record<string, unknown>): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message))
+  /** False when the socket is not open and the message went nowhere: the caller keeps what it meant to ask. */
+  send(message: Record<string, unknown>): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
+    this.ws.send(JSON.stringify(message))
+    return true
   }
 
   /** Whether the host has this page on screen (`kehikot.visible`). Hidden, the server sends no frames; said again after a reconnect. */

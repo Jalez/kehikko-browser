@@ -52,11 +52,17 @@ export function covering({
   trouble: Trouble | null
   pageUrl: string
 }): Covering {
-  if (trouble?.kind === 'failed') return { state: 'refused', words: FAILED_WORDS, detail: trouble.why ?? trouble.what, retry: trouble.url }
+  if (trouble?.kind === 'failed') return { state: 'refused', words: FAILED_WORDS, detail: withAddress(trouble.why ?? trouble.what, trouble.url), retry: trouble.url }
   if (trouble?.kind === 'slow') return { state: 'refused', words: SLOW_WORDS, detail: trouble.what, retry: trouble.url }
   if (opening) return { state: 'loading', words: LOADING_WORDS, detail: openingSaid(opening) }
   if (loadingShown) return { state: 'loading', words: LOADING_WORDS, detail: /^https?:/.test(pageUrl) ? labelFor(pageUrl, null, 64) : null }
   return null
+}
+
+/** A failure's second line names the address it could not open, when its sentence does not already. */
+function withAddress(said: string, url: string | null): string {
+  if (!url || said.includes(url)) return said
+  return said ? `${said} ${url}` : url
 }
 
 /** What a load that went wrong was trying to open, for the trouble's second line and Try again. */

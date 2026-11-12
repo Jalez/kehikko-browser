@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { Browser } from './hosted.tsx'
+import { RETRY_AFTER_MS } from '../src/app.tsx'
 import { FAILED_WORDS, LOADING_GRACE_MS, LOADING_WORDS, SLOW_WORDS, covering, troubleOf } from '../src/lib/loading.ts'
 import { addressShown, alreadyOpening, committed, openingSaid, pickedOpening, startOpening } from '../src/lib/opening.ts'
 import type { Api } from '../src/wire/api.ts'
@@ -211,6 +212,14 @@ describe('a pick', () => {
     await act(async () => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
     expect(screen.getByTestId('opening')).toBeDefined()
     act(() => s.events().said?.(`Could not open ${MR}: net::ERR_NAME_NOT_RESOLVED`))
+    /* The page pointed at is asked once more before the failure is shown. */
+    expect(screen.getByTestId('opening')).toBeDefined()
+    await act(async () => new Promise((r) => setTimeout(r, RETRY_AFTER_MS + 30)))
+    expect(s.gos()).toEqual([
+      { t: 'go', url: MR },
+      { t: 'go', url: MR },
+    ])
+    act(() => s.events().said?.(`Could not open ${MR}: net::ERR_NAME_NOT_RESOLVED`))
     expect(screen.queryByTestId('opening')).toBeNull()
     const trouble = screen.getByTestId('trouble')
     expect(trouble.textContent).toContain('The page could not be loaded.')
@@ -218,6 +227,7 @@ describe('a pick', () => {
     /* Try again asks for the same address again, and the cover says Loading once more. */
     act(() => screen.getByText('Try again').click())
     expect(s.gos()).toEqual([
+      { t: 'go', url: MR },
       { t: 'go', url: MR },
       { t: 'go', url: MR },
     ])
@@ -230,6 +240,17 @@ describe('a pick', () => {
     const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
     act(() => s.events().page?.(page(HOME)))
     await act(async () => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
+    act(() => s.events().page?.(page('chrome-error://chromewebdata/')))
+    /* Its trailing sentence is the same failure, not a second one: the one retry still comes. */
+    act(() => s.events().said?.(`Could not open ${MR}: net::ERR_CONNECTION_REFUSED`))
+    expect(screen.queryByTestId('trouble')).toBeNull()
+    await act(async () => new Promise((r) => setTimeout(r, RETRY_AFTER_MS + 30)))
+    expect(s.gos()).toEqual([
+      { t: 'go', url: MR },
+      { t: 'go', url: MR },
+    ])
+    /* The retry fails too, from the error page it was on: now the failure is shown. */
+    act(() => s.events().page?.({ ...page('chrome-error://chromewebdata/'), loading: true }))
     act(() => s.events().page?.(page('chrome-error://chromewebdata/')))
     expect(screen.getByTestId('trouble').textContent).toContain('The page could not be loaded.')
     /* The engine's sentence, heard after the page, fills in why. */
@@ -311,7 +332,7 @@ describe('the cover, as a value', () => {
     expect(covering({ opening: on, loadingShown: true, trouble: failed, pageUrl: HOME })).toEqual({
       state: 'refused',
       words: FAILED_WORDS,
-      detail: 'net::ERR_NAME_NOT_RESOLVED',
+      detail: `net::ERR_NAME_NOT_RESOLVED ${MR}`,
       retry: MR,
     })
     const slow = troubleOf('slow', on, HOME)
