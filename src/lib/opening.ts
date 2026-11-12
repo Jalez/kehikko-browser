@@ -21,6 +21,8 @@ export interface Opening {
   url: string | null
   /** What a person reads: the picked ref, or null for the address itself. */
   label: string | null
+  /** The page's title when the host's reading named one (a pick), for the host's own loading cover. */
+  title?: string | null
   from: 'pick' | 'handed' | 'typed'
   /** The page's address when this was asked, to tell its commit from an old page's news. */
   before: string
@@ -34,9 +36,31 @@ export function pickedOpening(now: Opening | null, ref: string, before: string):
 }
 
 /** An address asked of the engine. A pick's label is kept while it names the same page. */
-export function startOpening(now: Opening | null, next: { url: string; label: string | null; from: Opening['from']; before: string }): Opening {
+export function startOpening(now: Opening | null, next: { url: string; label: string | null; title?: string | null; from: Opening['from']; before: string }): Opening {
   const label = next.label ?? (now && !now.url ? now.label : null)
-  return { url: next.url, label, from: next.from, before: next.before, committed: false }
+  return { url: next.url, label, ...(next.title ? { title: next.title } : {}), from: next.from, before: next.before, committed: false }
+}
+
+/** What the host's cover says while a pick opens: the page's title once the reading named it, else the ref. */
+export function hostLoadingWords(now: Opening | null): string | null {
+  if (!now || now.from !== 'pick' || now.committed) return null
+  const what = now.title ?? now.label
+  return what ? `Loading ${what}…` : null
+}
+
+/**
+ * Whether a resolved pick is already on screen, so nothing needs opening: the page shows that
+ * address, its last load did not fail, and no other address is on its way (a newer navigation to
+ * something else would otherwise land over it). A same-address check alone is not enough.
+ */
+export function alreadyShown(url: string, pageUrl: string, now: Opening | null, failed: boolean): boolean {
+  if (failed || url !== pageUrl) return false
+  return !now?.url || now.url === url
+}
+
+/** The address an engine failure names (`Could not open <url>: …`), to tell an older navigation's failure from the one on its way. */
+export function failureFor(text: string): string | null {
+  return /^Could not open (\S+): /.exec(text)?.[1] ?? null
 }
 
 /**

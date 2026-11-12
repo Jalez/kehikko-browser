@@ -12,7 +12,7 @@ import { urlForSelection, refsToAsk } from '@/lib/follow'
 import { addressToOpen, handedSaid, type Handed } from '@/lib/handed'
 import { FOOT, footerItems } from '@/lib/footer'
 import { LOADING_AT_MOST, LOADING_GRACE_MS, SHOW_ANYWAY, covering, failedPage, troubleOf, type Trouble } from '@/lib/loading'
-import { addressShown, alreadyOpening, committed, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
+import { addressShown, alreadyOpening, alreadyShown, committed, failureFor, hostLoadingWords, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
 import { placeKeys } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
 import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
@@ -101,6 +101,12 @@ const NO_PAGE: PageState = { url: BLANK, title: '', canBack: false, canForward: 
 /** How long the cover says "Loading" at most before it says the page is taking long (`loading.ts`). */
 export const OPENING_AT_MOST = LOADING_AT_MOST
 
+/** A pick or hand-over whose load failed is asked once more after this long, before the failure is shown. */
+export const RETRY_AFTER_MS = 700
+
+/** A `tracker.get` the host did not answer is asked once more after this long. */
+export const ASK_AGAIN_MS = 1500
+
 export function App() {
   const pressRef = useRef<(press: Press) => string | void>(() => 'Not ready yet.')
   const host = useKehikot({ onPress: (press) => pressRef.current(press) })
@@ -145,6 +151,8 @@ export function Browser({
     setOpeningState(next)
   }, [])
   const pageRef = useRef<PageState>(NO_PAGE)
+  /* Bumped by every pick and every address asked by name: a pick's lookup that comes back after a newer one is dropped. */
+  const pickSeq = useRef(0)
   /* A load that failed or is taking long (see `loading.ts`), and whether the person put the cover away for this load. */
   const [trouble, setTroubleState] = useState<Trouble | null>(null)
   const troubleRef = useRef<Trouble | null>(null)
@@ -154,12 +162,42 @@ export function Browser({
   }, [])
   const [putAway, setPutAway] = useState(false)
   const [loadingShown, setLoadingShown] = useState(false)
+  /* The one automatic second try of a failed pick or hand-over: which address it was spent on, and its timer while it waits. */
+  const retried = useRef<string | null>(null)
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /* Asks the engine for an opening again (set below, once the stream exists). */
+  const resend = useRef<(again: Opening) => void>(() => {})
+  /* A navigation asked while the socket was down: sent when it is up again, if it is still what is being opened. */
+  const parked = useRef<string | null>(null)
+
+  /**
+   * A load failed. A pick or a hand-over — the page the person is pointing at — is asked once more
+   * before the failure is shown; whatever the failed attempt still says while that wait runs is its
+   * own trailing news, not a second failure. The second failure, or any other, is shown with Try again.
+   */
+  const fail = useCallback(
+    (now: Opening | null, was: string, why: string | null) => {
+      if (retryTimer.current) return
+      if (now?.url && now.from !== 'typed' && retried.current !== now.url) {
+        retried.current = now.url
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null
+          if (openingRef.current === now) resend.current(now)
+        }, RETRY_AFTER_MS)
+        return
+      }
+      if (now) setOpening(null)
+      setTrouble(troubleOf('failed', now, was, why))
+    },
+    [setOpening, setTrouble],
+  )
 
   const stream = useMemo(
     () =>
       makeStream({
         frame: (frame) => {
           frames.current?.(frame)
+          if (retryTimer.current) return
           if (openingRef.current && painted(openingRef.current)) setOpening(null)
         },
         page: (state) => {
@@ -172,12 +210,14 @@ export function Browser({
             setPutAway(false)
           }
           const now = openingRef.current
-          /* The main frame landed on Chrome's error page: the navigation failed. The engine's sentence follows, if it has one. */
-          if (failedPage(state.url) && !failedPage(was.url) && (now || was.loading)) {
-            setTrouble(troubleOf('failed', now, was.url))
-            if (now) setOpening(null)
+          /* The main frame landed on Chrome's error page: the navigation failed. The engine's sentence follows, if it has one.
+             A second failure from that error page (the retry) shows as its load ending there again. */
+          if (failedPage(state.url) && (!failedPage(was.url) || (was.loading && !state.loading)) && (now || was.loading)) {
+            fail(now, was.url, null)
             return
           }
+          /* Waiting to ask again: the failed attempt's pages do not commit the opening. */
+          if (retryTimer.current) return
           if (now) {
             const next = committed(now, state.url)
             if (next !== now) setOpening(next)
@@ -190,9 +230,12 @@ export function Browser({
           /* The server says something only when a press failed: a navigation that did not happen turns the cover into its failure. */
           const now = openingRef.current
           const known = troubleRef.current
+          const failedUrl = failureFor(text)
+          /* An older navigation's failure, heard after a newer one was asked: the newer one is what is wanted, and it is still on its way. */
+          if (now?.url && failedUrl && failedUrl !== now.url) return
+          if (retryTimer.current) return
           if (now) {
-            setOpening(null)
-            setTrouble(troubleOf('failed', now, pageRef.current.url, text))
+            fail(now, pageRef.current.url, text)
             return
           }
           if (known?.kind === 'failed' && !known.why) {
@@ -278,7 +321,7 @@ export function Browser({
    * once; the engine's committed address replaces it, redirect included.
    */
   const go = useCallback(
-    (typed: string, how: { from?: Opening['from']; label?: string } = {}) => {
+    (typed: string, how: { from?: Opening['from']; label?: string; title?: string } = {}) => {
       const address = normaliseAddress(typed)
       if (!address.ok) {
         setSaid(address.why)
@@ -286,15 +329,33 @@ export function Browser({
       }
       const from = how.from ?? 'typed'
       if (alreadyOpening(openingRef.current, address.url, from)) return true
+      /* Anything asked by name — typed, saved, handed over — is newer than a pick still being looked up: that pick does not land over it. */
+      if (from !== 'pick') pickSeq.current += 1
+      if (retryTimer.current) clearTimeout(retryTimer.current)
+      retryTimer.current = null
+      retried.current = null
       setSaid(null)
       setTrouble(null)
       setPutAway(false)
-      setOpening(startOpening(openingRef.current, { url: address.url, label: how.label ?? null, from, before: pageRef.current.url }))
-      stream.send({ t: 'go', url: address.url })
+      setOpening(startOpening(openingRef.current, { url: address.url, label: how.label ?? null, title: how.title ?? null, from, before: pageRef.current.url }))
+      parked.current = stream.send({ t: 'go', url: address.url }) === false ? address.url : null
       return true
     },
     [setOpening, setTrouble, stream],
   )
+  resend.current = (again) => {
+    setOpening(startOpening(null, { url: again.url!, label: again.label, title: again.title ?? null, from: again.from, before: pageRef.current.url }))
+    parked.current = stream.send({ t: 'go', url: again.url! }) === false ? again.url : null
+  }
+  useEffect(() => () => void (retryTimer.current && clearTimeout(retryTimer.current)), [])
+
+  /* The socket is up again: a navigation asked while it was down is sent now, if it is still what is being opened. */
+  useEffect(() => {
+    if (!connected || !parked.current) return
+    const url = parked.current
+    parked.current = null
+    if (openingRef.current?.url === url && !openingRef.current.committed) parked.current = stream.send({ t: 'go', url }) === false ? url : null
+  }, [connected, stream])
 
   /* ---------------- Saved addresses, per project. ---------------- */
   const projectPath = host.projectPath
@@ -337,37 +398,60 @@ export function Browser({
   const opened = useRef(0)
   const { request } = host
 
-  const openSelection = useCallback(async () => {
-    const picked = selection ? selection.split(' ') : []
-    const refs = refsToAsk(picked)
-    if (!refs.length) return
-    /* Said at once, before the host is asked: the address follows when the reading names it. */
-    setOpening(pickedOpening(openingRef.current, refs[0]!, pageRef.current.url))
-    let reading: { rows?: unknown; missing?: unknown; sources?: unknown } | null = null
-    try {
-      reading = (await request('tracker.get', { refs })) as typeof reading
-    } catch {
-      reading = null
-    }
-    /* Picked again meanwhile: that pick's own lookup opens it. */
-    if (lastSelection.current !== selection) return
-    const found = urlForSelection(picked, reading)
-    if (found.kind === 'open') {
-      waiting.current = null
+  const followRef = useRef(follow)
+  followRef.current = follow
+  const openSelectionRef = useRef<(attempt?: number) => Promise<void>>(async () => {})
+
+  const openSelection = useCallback(
+    async (attempt = 1) => {
+      const picked = selection ? selection.split(' ') : []
+      const refs = refsToAsk(picked)
+      if (!refs.length) return
+      const seq = ++pickSeq.current
+      /* A pick is what the person points at now: a place's remembered address that arrives later does not replace it. */
       opened.current += 1
-      if (found.url !== pageRef.current.url) go(found.url, { from: 'pick', label: found.ref })
-      else if (openingRef.current && !openingRef.current.url) setOpening(null)
-    } else {
-      if (openingRef.current && !openingRef.current.url) setOpening(null)
-      if (found.kind === 'pending') {
-        waiting.current = selection
-        setSaid(`Waiting for the host to read ${found.refs.join(', ')}…`)
-      } else {
+      /* Said at once, before the host is asked: the address follows when the reading names it. */
+      setOpening(pickedOpening(openingRef.current, refs[0]!, pageRef.current.url))
+      let reading: { rows?: unknown; missing?: unknown; sources?: unknown } | null = null
+      let unanswered = false
+      try {
+        reading = (await request('tracker.get', { refs })) as typeof reading
+      } catch {
+        unanswered = true
+      }
+      /* Picked again, asked for an address by name, or stopped following meanwhile: the newer act owns the page. */
+      const now = openingRef.current
+      if (seq !== pickSeq.current || lastSelection.current !== selection || !followRef.current) {
+        if (!followRef.current && now && !now.url) setOpening(null)
+        return
+      }
+      const found = urlForSelection(picked, reading)
+      if (found.kind === 'open') {
         waiting.current = null
+        if (alreadyShown(found.url, pageRef.current.url, now, troubleRef.current?.kind === 'failed')) {
+          if (now && !now.url) setOpening(null)
+        } else go(found.url, { from: 'pick', label: found.ref, ...(found.title ? { title: found.title } : {}) })
+        return
+      }
+      if (now && !now.url) setOpening(null)
+      /* Not opened: asked again when the host's reading moves. */
+      waiting.current = selection
+      if (found.kind === 'pending') {
+        setSaid(`Waiting for the host to read ${found.refs.join(', ')}…`)
+      } else if (unanswered && attempt === 1) {
+        setSaid(`The host did not answer about ${refs.join(', ')}; asking again…`)
+        setTimeout(() => {
+          if (seq === pickSeq.current && lastSelection.current === selection && followRef.current) void openSelectionRef.current(2)
+        }, ASK_AGAIN_MS)
+      } else if (unanswered) {
+        setSaid(`The host did not say which page ${refs.join(', ')} is. Browser asks again when the host's reading changes.`)
+      } else {
         setSaid(found.why)
       }
-    }
-  }, [go, request, selection, setOpening])
+    },
+    [go, request, selection, setOpening],
+  )
+  openSelectionRef.current = openSelection
 
   useEffect(() => {
     if (host.where !== 'hosted') return
@@ -395,9 +479,20 @@ export function Browser({
   }, [connected])
 
   useEffect(() => {
-    if (waiting.current && waiting.current === selection && follow) void openSelection()
+    if (waiting.current && waiting.current === selection && follow && connected) void openSelection()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host.trackerAt])
+
+  /* Following again: the pick on the canvas now is opened, not the next one only. */
+  const wasFollowing = useRef(follow)
+  useEffect(() => {
+    const was = wasFollowing.current
+    wasFollowing.current = follow
+    if (!follow || was || host.where !== 'hosted' || lastSelection.current === null || !selection) return
+    if (connected) void openSelection()
+    else unopened.current = selection
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [follow])
 
   /* ---------------- The address remembered per place. ---------------- */
   const pickedIds = pickedParts(host.parts).map((part) => part.id)
@@ -408,18 +503,26 @@ export function Browser({
   )
   const placeId = projectPath ? `${projectPath}::${keys[0]}` : null
   const arrived = useRef<string | null>(null)
+  /* How many picks and hand-overs had opened when this place was arrived at. Counted on arrival, not
+     when the socket comes up: a pick made since arriving is what the person points at, and a socket that
+     reconnects (or a memory read late) must not put the place's older address over it. */
+  const placeSeen = useRef<string | null>(null)
+  const openedOnArrival = useRef(0)
+  if (placeSeen.current !== placeId) {
+    placeSeen.current = placeId
+    openedOnArrival.current = opened.current
+  }
 
   useEffect(() => {
     if (!placeId || !projectPath || !connected || host.where !== 'hosted') return
     let live = true
     arrived.current = null
-    const before = opened.current
     api
       .place(projectPath, keys)
       .then((visit) => {
         if (!live) return
-        /* A handed-over address opened meanwhile is what was asked for now: the place's memory does not replace it. */
-        if (visit && visit.url !== page.url && opened.current === before) go(visit.url)
+        /* A pick or a handed-over address opened since arriving is what was asked for now: the place's memory does not replace it. */
+        if (visit && visit.url !== pageRef.current.url && opened.current === openedOnArrival.current && openingRef.current?.from !== 'pick') go(visit.url)
         arrived.current = placeId
       })
       .catch(() => {
@@ -569,6 +672,21 @@ export function Browser({
   useEffect(() => {
     if (footerSaid) footer?.(JSON.parse(footerSaid))
   }, [footer, footerSaid])
+
+  /* The host's own cover (2.84.0) while a pick opens: "Loading <title>…". The host shows it only when the
+     page does not draw within its grace, and only right after a context; `ready()` ends it. */
+  const coverWords = hostLoadingWords(opening)
+  const { loading: hostLoading, ready: hostReady } = host
+  const hostCovered = useRef(false)
+  useEffect(() => {
+    if (coverWords) {
+      hostCovered.current = true
+      hostLoading?.(coverWords)
+    } else if (hostCovered.current) {
+      hostCovered.current = false
+      hostReady?.()
+    }
+  }, [coverWords, hostLoading, hostReady])
 
   /* Hidden by the host (2.45.0): no frames are made or sent for a canvas nobody sees. */
   const visible = host.visible !== false
