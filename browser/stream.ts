@@ -191,6 +191,7 @@ export function streamSession(ws: Connection, engine: Engine, ticket: string): S
     },
     cleared: () => send({ t: 'console-clear' }),
     show: (view, id) => send({ t: 'show', view, id }),
+    notice: (key, notice) => send({ t: 'notice', key, notice }),
   }
 
   const heard = (raw: string) => {
@@ -271,6 +272,19 @@ export function streamSession(ws: Connection, engine: Engine, ticket: string): S
       case 'retry':
         await engine.ready()
         return
+      case 'place': {
+        /* The viewer stands at a place: its own page, kept ready or new (keep.ts). Answered to this viewer. */
+        const key = typeof m.key === 'string' ? m.key.slice(0, 2000) : ''
+        if (!key) return
+        const placed = await engine.place(key, typeof m.projectPath === 'string' ? m.projectPath : null)
+        return send({ t: 'placed', key, ...placed })
+      }
+      case 'as-is': {
+        const key = typeof m.key === 'string' ? m.key : ''
+        if (!key) return
+        engine.setAsIs(key, m.on === true)
+        return send({ t: 'as-is', key, on: m.on === true })
+      }
       default:
         return
     }

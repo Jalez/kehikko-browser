@@ -23,7 +23,10 @@ import { BLANK, labelFor } from './address.ts'
  * agent is sent there rather than pressing; Save is pressable by agents as it is in the header.
  */
 
-export const FOOT = { BACK: 'back', FORWARD: 'forward', RELOAD: 'reload', STOP: 'stop', PAGE: 'page', ADDRESS: 'address', SAVE: 'save' } as const
+export const FOOT = { BACK: 'back', FORWARD: 'forward', RELOAD: 'reload', STOP: 'stop', PAGE: 'page', ADDRESS: 'address', SAVE: 'save', NEWER: 'newer', NOTICE: 'notice' } as const
+
+/** What the footer says about a kept page only when it matters: a newer version it would not load over your typing, or a refresh that failed. */
+export const NEWER_LABEL = 'Newer version available: Reload'
 
 /** What the address field says when it is empty: the same words as the page's own field. */
 export const ADDRESS_PLACEHOLDER = 'Type an address: github.com/…, localhost:5173'
@@ -43,6 +46,8 @@ export interface FooterState {
   field?: boolean
   /** What the address field holds when nobody is typing: what is being opened, else the page's own address. Defaults to `url`. */
   shown?: string
+  /** News about the page kept ready, said only when it matters (`keep.ts`). Nothing otherwise. */
+  notice?: { kind: 'newer' } | { kind: 'failed'; why: string } | null
 }
 
 export function footerItems(state: FooterState): FooterItem[] {
@@ -86,6 +91,20 @@ export function footerItems(state: FooterState): FooterItem[] {
           optional: true,
           ...(page ? { tooltip: page.slice(0, LIMITS.FOOTER_TOOLTIP) } : {}),
         },
+    ...(state.notice?.kind === 'newer'
+      ? [
+          {
+            kind: 'run',
+            id: FOOT.NEWER,
+            label: NEWER_LABEL,
+            icon: 'refresh',
+            align: 'end',
+            tooltip: 'The page changed while you were away. It was not reloaded because something is typed in it; reloading may lose that.',
+          },
+        ]
+      : state.notice?.kind === 'failed'
+        ? [{ kind: 'text', id: FOOT.NOTICE, text: state.notice.why.slice(0, LIMITS.FOOTER_TEXT), align: 'end', optional: true }]
+        : []),
     {
       kind: 'run',
       id: FOOT.SAVE,

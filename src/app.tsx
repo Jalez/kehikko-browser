@@ -20,7 +20,7 @@ import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from 
 import { Viewer } from '@/view/viewer'
 import { Sheet } from '@/view/sheet'
 import { api as realApi, type Api, type Endpoint } from '@/wire/api'
-import { Stream, type ConsoleEntry, type Dialog, type Frame, type PageState, type Status } from '@/wire/stream'
+import { Stream, type ConsoleEntry, type Dialog, type Frame, type PageNotice, type PageState, type Placed, type Status } from '@/wire/stream'
 import { useKehikot, type Host } from '@/wire/use-kehikot'
 
 const isView = (value: unknown): value is View => VIEWS.some((one) => one.id === value)
@@ -47,6 +47,7 @@ export function headerItems({
   canSave,
   view = 'browser',
   saveInFooter = false,
+  asIs = null,
 }: {
   saved: readonly Saved[]
   follow: boolean
@@ -54,6 +55,8 @@ export function headerItems({
   view?: View
   /** The host draws the footer, and Save address sits there beside the address it saves: not here too. */
   saveInFooter?: boolean
+  /** Whether the page on screen is never refreshed by itself; `null` when no page is kept for a place (no toggle). */
+  asIs?: boolean | null
 }): HeaderItem[] {
   const items: unknown[] = [{ kind: 'switch', id: 'view', label: 'Show', options: VIEWS.map((one) => ({ id: one.id, label: one.label })), value: view, agents: true }]
   if (saved.length) {
@@ -87,6 +90,7 @@ export function headerItems({
     })
   }
   items.push(
+    ...(asIs === null ? [] : [{ kind: 'toggle', id: 'as-is', label: 'Never refresh this page by itself', checked: asIs, group: 'This page' }]),
     { kind: 'run', id: 'manage', label: 'Edit saved addresses…', icon: 'pencil', group: 'Addresses' },
     { kind: 'run', id: 'endpoint', label: 'Playwright endpoint…', icon: 'code', group: 'Playwright', tool: 'cdp_endpoint' },
     { kind: 'run', id: 'devtools', label: 'Open DevTools', icon: 'external', group: 'Playwright' },
@@ -104,6 +108,9 @@ export const OPENING_AT_MOST = LOADING_AT_MOST
 
 /** A pick or hand-over whose load failed is asked once more after this long, before the failure is shown. */
 export const RETRY_AFTER_MS = 700
+
+/** How long an arrival waits for the engine to show the place's page before asking the place's memory anyway. */
+export const PLACED_WITHIN_MS = 3000
 
 /** A `tracker.get` the host did not answer is asked once more after this long. */
 export const ASK_AGAIN_MS = 1500
@@ -174,6 +181,13 @@ export function Browser({
      or once it said nothing was shown here (`empty`: the empty space). Null otherwise. */
   const [here, setHereState] = useState<{ id: string; state: 'reading' | 'empty' } | null>(null)
   const hereRef = useRef<{ id: string; state: 'reading' | 'empty' } | null>(null)
+  /* The engine's answers to `place`, by key, for the arrival waiting on them. */
+  const placedWaiters = useRef(new Map<string, (placed: Placed | null) => void>())
+  /* The place the engine was last asked to show, for its notices. */
+  const engineKeyRef = useRef<string | null>(null)
+  /* News about the page on screen for the footer (a newer version, a refresh that failed), and whether it refreshes by itself. */
+  const [notice, setNotice] = useState<PageNotice>(null)
+  const [asIs, setAsIsState] = useState(false)
   const setHere = useCallback((next: { id: string; state: 'reading' | 'empty' } | null) => {
     hereRef.current = next
     setHereState(next)
@@ -258,6 +272,17 @@ export function Browser({
         open: setConnected,
         console: (entry) => setLines((now) => ({ ...now, entries: appendEntry(now.entries, entry) })),
         consoleCleared: () => setLines({ entries: [], dropped: 0 }),
+        placed: (placed) => {
+          const waiter = placedWaiters.current.get(placed.key)
+          placedWaiters.current.delete(placed.key)
+          waiter?.(placed)
+        },
+        notice: (key, news) => {
+          if (key === engineKeyRef.current) setNotice(news)
+        },
+        asIs: (key, on) => {
+          if (key === engineKeyRef.current) setAsIsState(on)
+        },
         show: (asked, id) => {
           if (!VIEWS.some((one) => one.id === asked)) return
           setPanel(null)
@@ -547,10 +572,16 @@ export function Browser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placeId, host.where])
 
+  /* Arriving (and shown again after the host hid this page): the engine shows this place's own page,
+     the one kept ready, at once and as it was left, or a new blank one. Only a blank one asks the
+     place's memory what belongs here. A page the host keeps hidden does not ask: the one on screen does. */
+  const onScreen = host.visible !== false
   useEffect(() => {
-    if (!placeId || !projectPath || !connected || host.where !== 'hosted') return
+    if (!placeId || !projectPath || !connected || host.where !== 'hosted' || !onScreen) return
     let live = true
     arrived.current = null
+    engineKeyRef.current = placeId
+    setNotice(null)
     const settle = (visit: { url: string } | null) => {
       if (!live) return
       arrived.current = placeId
@@ -566,17 +597,33 @@ export function Browser({
       setHere({ id: placeId, state: 'empty' })
       if (pageRef.current.url !== BLANK) stream.send({ t: 'go', url: BLANK })
     }
-    api.place(projectPath, key).then(settle, () => {
-      /* Memory unreadable: whatever is up stays, uncovered, rather than a blank that hides it. */
+    const placed = new Promise<Placed | null>((resolve) => {
+      placedWaiters.current.set(placeId, resolve)
+      if (!stream.send({ t: 'place', key: placeId, projectPath })) resolve(null)
+      /* An engine that does not answer: the place's memory, as before pages were kept. */
+      setTimeout(() => resolve(null), PLACED_WITHIN_MS)
+    })
+    void placed.then((answer) => {
       if (!live) return
-      arrived.current = placeId
-      setHere(null)
+      placedWaiters.current.delete(placeId)
+      setAsIsState(answer?.asIs ?? false)
+      if (answer?.kept) {
+        arrived.current = placeId
+        setHere(null)
+        return
+      }
+      api.place(projectPath, key).then(settle, () => {
+        /* Memory unreadable: whatever is up stays, uncovered, rather than a blank that hides it. */
+        if (!live) return
+        arrived.current = placeId
+        setHere(null)
+      })
     })
     return () => {
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placeId, connected, host.where])
+  }, [placeId, connected, host.where, onScreen])
 
   useEffect(() => {
     if (!projectPath || !placeId || arrived.current !== placeId || hereRef.current?.id === placeId) return
@@ -690,9 +737,23 @@ export function Browser({
         setOpening(null)
         return
       }
+      /* The newer version the footer offered, over what is typed in the page: the person decided. */
+      if (item === FOOT.NEWER) {
+        setNotice(null)
+        stream.send({ t: 'reload' })
+        return
+      }
+      if (item === 'as-is') {
+        const key = engineKeyRef.current
+        if (!key) return 'No page is kept for this place.'
+        const on = typeof value === 'boolean' ? value : !asIs
+        setAsIsState(on)
+        stream.send({ t: 'as-is', key, on })
+        return
+      }
       return `Browser has nothing called "${item}" to press.`
     },
-    [follow, go, openDevtools, saveHere, saved, setFollow, setOpening, stream],
+    [asIs, follow, go, openDevtools, saveHere, saved, setFollow, setOpening, stream],
   )
   if (pressRef) pressRef.current = press
 
@@ -701,7 +762,11 @@ export function Browser({
      host that draws a footer field (2.46.0) the address is in the footer too, and the page has no row. */
   const hosted = host.where === 'hosted'
   const drawsFooter = hosted && host.drawsFooter === true
-  const items = useMemo(() => headerItems({ saved, follow, canSave, view, saveInFooter: drawsFooter }), [saved, follow, canSave, view, drawsFooter])
+  const kept = hosted && Boolean(placeId) && /^https?:/.test(page.url)
+  const items = useMemo(
+    () => headerItems({ saved, follow, canSave, view, saveInFooter: drawsFooter, asIs: kept ? asIs : null }),
+    [saved, follow, canSave, view, drawsFooter, kept, asIs],
+  )
   const { header } = host
   useEffect(() => header(items), [header, items])
 
@@ -709,13 +774,18 @@ export function Browser({
   const shownUrl = addressShown(opening, page.url)
   const footerSaid = drawsFooter
     ? JSON.stringify(
-        footerItems({ url: page.url, title: page.title, canBack: page.canBack, canForward: page.canForward, loading: busy, canSave, field: drawsField, shown: shownUrl }),
+        footerItems({ url: page.url, title: page.title, canBack: page.canBack, canForward: page.canForward, loading: busy, canSave, field: drawsField, shown: shownUrl, notice }),
       )
     : null
   const { footer } = host
   useEffect(() => {
     if (footerSaid) footer?.(JSON.parse(footerSaid))
   }, [footer, footerSaid])
+  /* No footer drawn: the page's own line says it, the same words. */
+  useEffect(() => {
+    if (drawsFooter || !notice) return
+    setSaid(notice.kind === 'newer' ? 'A newer version of this page is available. Press Reload to load it; what you typed may be lost.' : notice.why)
+  }, [drawsFooter, notice])
 
   /* The host's own cover (2.84.0) while a pick opens: "Loading <title>…". The host shows it only when the
      page does not draw within its grace, and only right after a context; `ready()` ends it. */

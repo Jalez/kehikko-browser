@@ -85,6 +85,23 @@ address; nothing here is Kehikot-specific).
   it, the project's running dev servers (only the ports the project names in
   its scripts and config, asked on loopback) and its recent pages, with the
   address field.
+- **Keeps pages ready.** Each place's page stays open in the background once
+  you have seen it, so going back is instant and finds it as you left it,
+  scrolled and typed into. A page out of sight is frozen (its scripts, timers,
+  animations and media stop): it costs memory, not processor. Automatic keeps
+  the 6 pages used most recently and often, within min(1 GB, 10% of memory);
+  half of that when macOS says memory is short, only the page on screen when
+  it is very short. Nothing is loaded speculatively.
+- **Fresh without flashing.** A kept page shown again after a minute away is
+  checked with the site (a conditional request with its ETag or
+  Last-Modified); a changed one, or one whose site does not say after 15
+  minutes away, is loaded again off screen and swapped in once painted. One at
+  a time, never while the machine is busy, and never over something typed in
+  the page: the footer then offers "Newer version available: Reload". "Never
+  refresh this page by itself" is a toggle in the header.
+- **Settings to tinker with**, each Automatic by default (the host's settings
+  form): pages kept ready, their memory, when they refresh, how (ask the site
+  first or always reload), and suggestions in an empty space.
 - **Saved addresses**, per project, in the Go menu; Run › Save this address;
   Run › Edit saved addresses… to rename and remove.
 
@@ -138,6 +155,7 @@ whoever called the MCP door on this machine.
 
 - `<project>/.kehikot/browser/saved.json` — saved addresses.
 - `<project>/.kehikot/browser/places.json` — the address last shown at each place.
+- `<project>/.kehikot/browser/settings.json` — Browser's settings, written only through the host's settings form.
 - `<project>/.kehikot/browser/walkthroughs/<id>/` — `walkthrough.json` and a
   screenshot per step (`01.png`, …).
 - `<project>/.kehikot/browser/repros/<id>/` — `repro.json`, a screenshot per

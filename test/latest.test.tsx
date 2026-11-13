@@ -37,6 +37,7 @@ function fakeStream({ connected = true, up = () => true }: { connected?: boolean
       send: (m: Record<string, unknown>) => {
         if (!up()) return false
         sent.push(m)
+        if (m.t === 'place') queueMicrotask(() => events.placed?.({ key: String(m.key), kept: false, asIs: false }))
         return true
       },
       resize: () => {},

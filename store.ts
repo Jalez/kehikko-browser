@@ -19,7 +19,7 @@ import { ID } from './manifest.ts'
  * Both sides are realpath'd before the containment check, so a `.kehikot` that
  * is a symlink out of the project is refused rather than followed.
  */
-export const FILES = ['saved', 'places'] as const
+export const FILES = ['saved', 'places', 'settings'] as const
 export type DataFile = (typeof FILES)[number]
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }

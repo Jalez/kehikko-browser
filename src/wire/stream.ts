@@ -48,7 +48,21 @@ export interface StreamEvents {
   consoleCleared?(): void
   /** An agent asked for a view (`show_view`). */
   show?(view: string, id: string | null): void
+  /** The engine shows this place's own page: the one kept ready (`kept`), or a new blank one. */
+  placed?(placed: Placed): void
+  /** News about the page on screen at a place, for the footer: a newer version, a refresh that failed, or none. */
+  notice?(key: string, notice: PageNotice): void
+  /** Whether the page at a place is refreshed by itself (`asIs`: never). */
+  asIs?(key: string, on: boolean): void
 }
+
+export interface Placed {
+  key: string
+  kept: boolean
+  asIs: boolean
+}
+
+export type PageNotice = { kind: 'newer' } | { kind: 'failed'; why: string } | null
 
 export interface ConsoleEntry {
   n: number
@@ -138,6 +152,15 @@ export class Stream {
         case 'show':
           this.events.show?.(String(m.view ?? ''), typeof m.id === 'string' ? m.id : null)
           break
+        case 'placed':
+          if (typeof m.key === 'string') this.events.placed?.({ key: m.key, kept: m.kept === true, asIs: m.asIs === true })
+          break
+        case 'notice':
+          if (typeof m.key === 'string') this.events.notice?.(m.key, noticeOf(m.notice))
+          break
+        case 'as-is':
+          if (typeof m.key === 'string') this.events.asIs?.(m.key, m.on === true)
+          break
       }
     }
     ws.onclose = (event) => {
@@ -170,4 +193,12 @@ export class Stream {
     this.size = size
     this.send({ t: 'size', ...size })
   }
+}
+
+/** A notice off the wire, or null for anything it does not say. */
+export function noticeOf(raw: unknown): PageNotice {
+  const n = raw as { kind?: unknown; why?: unknown } | null
+  if (n?.kind === 'newer') return { kind: 'newer' }
+  if (n?.kind === 'failed') return { kind: 'failed', why: typeof n.why === 'string' ? n.why.slice(0, 200) : 'Couldn’t refresh.' }
+  return null
 }

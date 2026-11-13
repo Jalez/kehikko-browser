@@ -19,7 +19,12 @@ function fakeStream() {
     return {
       start: () => events.open?.(true),
       stop: () => {},
-      send: (m: Record<string, unknown>) => sent.push(m),
+      send: (m: Record<string, unknown>) => {
+        sent.push(m)
+        /* The engine answers a place with a new blank page of its own: nothing kept (keep.ts). */
+        if (m.t === 'place') queueMicrotask(() => events.placed?.({ key: String(m.key), kept: false, asIs: false }))
+        return true
+      },
       resize: () => {},
       shown: () => {},
     } as unknown as Stream

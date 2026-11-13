@@ -1,5 +1,6 @@
 import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
 import pkg from './package.json'
+import { FIELDS } from './settings-fields.ts'
 
 export const ID = 'kehikot.browser'
 /** The module's version: package.json's, the one place it is written. A release is tagged with it. */
@@ -71,6 +72,8 @@ export const DECLARED: Manifest = manifestSchema.parse({
        stream socket are plain same-origin requests. See vite.config.ts. */
     storage: true,
     prompt: false,
+    /* What a person may tinker with (protocol 2.15.0): pages kept ready, refreshing, suggestions. Each defaults to Automatic. */
+    settings: FIELDS,
   },
   health: '/healthz',
   /* What this module provides to others (protocol 2.85.0), found through `services.find`, never by id.
@@ -80,7 +83,7 @@ export const DECLARED: Manifest = manifestSchema.parse({
     'page.viewer': { name: 'Browser', tool: 'navigate' },
     'module.folders': {
       name: 'Browser',
-      folders: [{ folder: 'browser', says: 'Saved addresses, the page open per part, and walkthroughs, repros and before/after shots with their screenshots.' }],
+      folders: [{ folder: 'browser', says: 'Saved addresses, the page open per place, Browser’s settings, and walkthroughs, repros and before/after shots with their screenshots.' }],
     },
   },
 })

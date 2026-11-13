@@ -12,6 +12,9 @@ import { ConsoleBuffer, levelOf, requestSaid, sourceOf, sourceOfStack, type Entr
 import { clearHighlight, showHighlight, type Highlighted } from './highlight.ts'
 import { allowOriginsArg, DevtoolsWindow, devtoolsFrontend } from './devtools.ts'
 import { NO_SIGNAL_HANDLERS } from './signals.ts'
+import { Keeper, type Notice, type PageOps, type Revalidated } from './keep.ts'
+import { MachineReading } from './pressure.ts'
+import { keepSettingsFor } from '../settings.ts'
 
 /**
  * One real Chromium, driven over CDP, shared by every container of this module
@@ -109,6 +112,8 @@ export interface Listener {
   cleared?(): void
   /** An agent asked the person's page to show one of its views (`show_view`). */
   show?(view: string, id: string | null): void
+  /** News about the page on screen at a place, for the footer (`keep.ts`): a newer version, a refresh that failed, or nothing. */
+  notice?(key: string, notice: Notice): void
 }
 
 /** A page captured for a before/after shot: its own viewport and colour scheme, never the one the person sees. */
@@ -128,12 +133,77 @@ export interface Endpoint {
   port: number
 }
 
+/** Set on a page's window when it listens for `beforeunload`: it may lose something if loaded again. */
+export const UNLOAD_MARK = `__kehikotUnload_${Math.random().toString(36).slice(2, 10)}`
+
+/** Whether something typed into the page would be lost by loading it again. Run in the page. */
+export function dirtyInPage(mark: string): boolean {
+  const fields = Array.from(document.querySelectorAll('input, textarea, select'))
+  const changed = fields.some((el) => {
+    if (el instanceof HTMLInputElement) {
+      if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked
+      if (el.type === 'file') return (el.files?.length ?? 0) > 0
+      if (['hidden', 'submit', 'button', 'reset', 'image'].includes(el.type)) return false
+      return el.value !== el.defaultValue
+    }
+    if (el instanceof HTMLTextAreaElement) return el.value !== el.defaultValue
+    if (el instanceof HTMLSelectElement) return Array.from(el.options).some((o) => o.selected !== o.defaultSelected)
+    return false
+  })
+  const active = document.activeElement as HTMLElement | null
+  const editing = Boolean(active?.isContentEditable && (active.textContent ?? '').trim())
+  const w = window as unknown as Record<string, unknown>
+  return changed || editing || typeof window.onbeforeunload === 'function' || w[mark] === true
+}
+
+const PAUSED = `__kehikotPaused_${Math.random().toString(36).slice(2, 10)}`
+
+/**
+ * Out of sight: what moves on the page stops — media, CSS animations and transitions, Web Animations,
+ * and animation frames. A frame callback is held, not run, until the page is back: the debugger must
+ * hold the scripts OUTSIDE a frame, because held inside one the frame never ends and the compositor
+ * and GPU go on working for a page nobody sees (measured: about 1.7% of a core per animated page).
+ */
+const FREEZE_IN_PAGE = `(() => { try {
+  if (window[${JSON.stringify(PAUSED)}]) return
+  const media = Array.from(document.querySelectorAll('video, audio')).filter((m) => !m.paused)
+  media.forEach((m) => m.pause())
+  const style = document.createElement('style')
+  style.textContent = '*, *::before, *::after { animation-play-state: paused !important; transition: none !important }'
+  document.documentElement.append(style)
+  const animations = (document.getAnimations ? document.getAnimations() : []).filter((a) => a.playState === 'running' && !(a instanceof CSSAnimation))
+  animations.forEach((a) => a.pause())
+  const raf = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  const held = new Map()
+  let next = 1
+  window.requestAnimationFrame = (callback) => { const id = 0x40000000 + next++; held.set(id, callback); return id }
+  window.cancelAnimationFrame = (id) => { if (!held.delete(id)) cancel.call(window, id) }
+  window[${JSON.stringify(PAUSED)}] = { media, style, animations, raf, cancel, held }
+} catch {} })()`
+
+/** Two real frames after the hold, so every frame callback already asked for has run (and been held). */
+const FRAMES_IN_PAGE = `new Promise((done) => { const was = window[${JSON.stringify(PAUSED)}]; const raf = was ? was.raf : window.requestAnimationFrame; raf.call(window, () => raf.call(window, done)) })`
+
+/** Back on screen: what was paused plays again, and only that; the held frame callbacks run on the next frame. */
+const THAW_IN_PAGE = `(() => { try {
+  const was = window[${JSON.stringify(PAUSED)}]
+  if (!was) return
+  delete window[${JSON.stringify(PAUSED)}]
+  window.requestAnimationFrame = was.raf
+  window.cancelAnimationFrame = was.cancel
+  for (const callback of was.held.values()) was.raf.call(window, callback)
+  was.style.remove()
+  was.animations.forEach((a) => a.play())
+  was.media.forEach((m) => m.play().catch(() => {}))
+} catch {} })()`
+
 const SLOT = `__kehikotRefs_${Math.random().toString(36).slice(2, 10)}`
 const HIGHLIGHT = `__kehikot_highlight_${Math.random().toString(36).slice(2, 10)}`
 const MAX_PAGES = 8
 
 /** A function to run in the page, with a no-op `__name` in case a transpiler kept names. */
-function inPage<A>(fn: (args: A) => unknown, args: A): string {
+export function inPage<A>(fn: (args: A) => unknown, args: A): string {
   return `(() => { const __name = (f) => f; return (${fn.toString()})(${JSON.stringify(args)}) })()`
 }
 
@@ -176,6 +246,20 @@ export class Engine {
   private devtools: DevtoolsWindow | null = null
   /** Set by `end`: this process is stopping, and nothing starts the browser again. */
   private ended = false
+  /** Each place's page, kept ready (`keep.ts`): made on the first `place`, gone with the browser. */
+  private keeper: Keeper<Page> | null = null
+  /** The project whose settings say what is kept. */
+  private keepProject: string | null = null
+  /** A page opened for the keeper: adopted, but not put in front. */
+  private behindNext = false
+  /** Pages out of sight, with the session that holds them frozen. */
+  private frozen = new Map<Page, CDPSession>()
+  /** Sessions to let go once the cast session has taken their page over (a thawed page, a fresh copy). */
+  private handover = new Map<Page, CDPSession>()
+  /** Each page's document validators, for asking the site whether it changed (`revalidate`). */
+  private validators = new WeakMap<Page, { etag?: string; lastModified?: string }>()
+  private machineReading = new MachineReading(process.platform, () => void this.keeper?.trim().catch(() => {}))
+  private trimTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private readonly modulePort: () => number,
@@ -282,12 +366,16 @@ export class Engine {
       .then((v) => v.webSocketDebuggerUrl ?? null)
       .catch(() => null)
 
+    /* Who listens for `beforeunload`, so a refresh never drops what a page would have warned about. */
+    await context
+      .addInitScript(`(() => { try { const add = EventTarget.prototype.addEventListener; EventTarget.prototype.addEventListener = function (type, ...rest) { if (type === 'beforeunload' && this === window) window[${JSON.stringify(UNLOAD_MARK)}] = true; return add.call(this, type, ...rest) } } catch {} })()`)
+      .catch(() => {})
     context.on('page', (page) => {
       if (this.quietNext) {
         this.quiet.add(page)
         return
       }
-      this.adopt(page, true)
+      this.adopt(page, !this.behindNext)
     })
     context.on('close', () => {
       /* No browser, no endpoint: the page's panel is told so (`live.ts`), not left showing a dead port. */
@@ -298,6 +386,11 @@ export class Engine {
       this.current = null
       this.session = null
       this.sessionPage = null
+      this.keeper = null
+      this.frozen.clear()
+      this.handover.clear()
+      if (this.trimTimer) clearInterval(this.trimTimer)
+      this.trimTimer = null
       this.setStatus({ state: 'failed', why: 'The browser closed. Press Try again to start it again.' })
     })
     const pages = context.pages()
@@ -378,11 +471,21 @@ export class Engine {
       if (said) this.note(said)
     })
     page.on('response', (response) => {
+      if (mainNavigation(page, response.request()) && response.status() < 300) {
+        const headers = response.headers()
+        this.validators.set(page, { ...(headers.etag ? { etag: headers.etag } : {}), ...(headers['last-modified'] ? { lastModified: headers['last-modified'] } : {}) })
+      }
       if (response.status() < 400) return
       const said = requestSaid({ url: response.url(), method: response.request().method(), status: response.status(), page: page.url() })
       if (said) this.note(said)
     })
     page.on('close', () => {
+      this.frozen.delete(page)
+      this.handover.delete(page)
+      if (this.keeper?.holds(page)) {
+        void this.keeper.closed(page).catch(() => {})
+        return
+      }
       if (page !== this.current) return
       const rest = this.context?.pages().filter((p) => p !== page) ?? []
       const next = rest[rest.length - 1]
@@ -390,10 +493,12 @@ export class Engine {
       else if (this.context) void this.context.newPage().catch(() => {})
     })
     if (front) {
+      /* A popup of the place on screen is that place's page until it closes. */
+      if (this.keeper && this.current && this.keeper.page() === this.current) this.keeper.popup(page)
       void this.focus(page)
-      /* Popups pile up; the oldest go once there are too many. */
-      const pages = this.context?.pages() ?? []
-      for (const old of pages.slice(0, Math.max(0, pages.length - MAX_PAGES))) if (old !== page) void old.close().catch(() => {})
+      /* Popups pile up; the oldest go once there are too many. A page kept ready is not a popup. */
+      const loose = (this.context?.pages() ?? []).filter((one) => one !== page && !this.keeper?.holds(one) && !this.quiet.has(one))
+      for (const old of loose.slice(0, Math.max(0, loose.length - MAX_PAGES))) void old.close().catch(() => {})
     }
   }
 
@@ -424,6 +529,10 @@ export class Engine {
       for (const one of this.listeners) one.frame?.(frame)
     })
     await this.applySize(session)
+    /* The cast session holds the page now: what held it frozen, or loaded it out of sight, lets go. */
+    const before = this.handover.get(page)
+    this.handover.delete(page)
+    if (before) await before.detach().catch(() => {})
     this.casting = false
     if (this.anyoneLooking()) await this.cast(true)
   }
@@ -647,6 +756,172 @@ export class Engine {
   /* ------------------------------------------------------------------ *
    * What the person's bar and an agent's tools do.
    * ------------------------------------------------------------------ */
+
+  /**
+   * A viewer stands at a place (`key`, its project and space and kehikko): that place's own page is
+   * shown, the one kept ready or a new blank one. `kept` says which. The page that was on screen is
+   * frozen and kept, within what the settings and the machine allow.
+   */
+  async place(key: string, projectPath: string | null): Promise<{ kept: boolean; asIs: boolean }> {
+    await this.ready()
+    this.keepProject = projectPath
+    const keeper = (this.keeper ??= new Keeper<Page>(this.keepOps()))
+    if (!this.trimTimer) {
+      this.trimTimer = setInterval(() => void this.keeper?.trim().catch(() => {}), 15_000)
+      this.trimTimer.unref?.()
+    }
+    const { kept } = await keeper.show(key)
+    /* A page that belongs to no place (the one from before places were said, a stray tab) would run
+       unseen and unfrozen: it goes. */
+    for (const stray of this.context?.pages() ?? []) {
+      if (stray !== this.current && !keeper.holds(stray) && !this.quiet.has(stray)) void stray.close().catch(() => {})
+    }
+    return { kept, asIs: keeper.asIs(key) }
+  }
+
+  /** Never refresh the page at this place by itself, or again do. */
+  setAsIs(key: string, on: boolean): void {
+    this.keeper?.setAsIs(key, on)
+  }
+
+  /** How many pages are kept ready besides the one on screen. */
+  keptCount(): number {
+    return Math.max(0, (this.keeper?.kept.size ?? 0) - (this.keeper?.onScreen ? 1 : 0))
+  }
+
+  private keepOps(): PageOps<Page> {
+    const engine = this
+    const within = <T>(ms: number, work: Promise<T>, otherwise: T): Promise<T> =>
+      Promise.race([work.catch(() => otherwise), new Promise<T>((r) => setTimeout(() => r(otherwise), ms))])
+    const openBehind = async (): Promise<Page> => {
+      const context = await engine.ready()
+      engine.behindNext = true
+      try {
+        return await context.newPage()
+      } finally {
+        engine.behindNext = false
+      }
+    }
+    return {
+      async open() {
+        /* The page the browser started with, still blank and nobody's, is the first place's. */
+        const first = engine.current
+        if (first && !first.isClosed() && !engine.keeper?.holds(first) && first.url() === BLANK) return first
+        return openBehind()
+      },
+      close: async (page) => {
+        engine.frozen.delete(page)
+        await page.close().catch(() => {})
+      },
+      show: (page) => engine.focus(page),
+      freeze: (page) => engine.freeze(page),
+      thaw: (page) => engine.thaw(page),
+      alive: (page) => !page.isClosed(),
+      url: (page) => page.url(),
+      heapBytes: async (page) => {
+        const session = engine.frozen.get(page) ?? (engine.context ? await engine.context.newCDPSession(page) : null)
+        if (!session) return 0
+        const used = await within(2000, session.send('Runtime.getHeapUsage').then((r) => (r as { usedSize?: number }).usedSize ?? 0), 0)
+        if (!engine.frozen.has(page)) await session.detach().catch(() => {})
+        return used
+      },
+      dirty: (page) => within(2000, page.evaluate(inPage(dirtyInPage, UNLOAD_MARK)) as Promise<boolean>, true),
+      revalidate: (page) => engine.revalidate(page),
+      loadFresh: async (page) => {
+        const url = page.url()
+        const scroll = await within(1000, page.evaluate(() => ({ x: scrollX, y: scrollY })), { x: 0, y: 0 })
+        const fresh = await openBehind()
+        try {
+          /* Its own session holds the viewer's size until the cast session takes it over. */
+          const own = await engine.context!.newCDPSession(fresh)
+          engine.handover.set(fresh, own)
+          await own.send('Emulation.setDeviceMetricsOverride', { width: engine.size.width, height: engine.size.height, deviceScaleFactor: engine.size.scale, mobile: false }).catch(() => {})
+          await fresh.goto(url, { waitUntil: 'load', timeout: 20_000 })
+          await fresh.evaluate(({ x, y }) => scrollTo(x, y), scroll).catch(() => {})
+          /* Painted before it is swapped in: two frames. */
+          await within(1000, fresh.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))), null)
+          return fresh
+        } catch (error) {
+          await fresh.close().catch(() => {})
+          throw new Error(error instanceof Error ? error.message.split('\n')[0]! : String(error))
+        }
+      },
+      machine: () => engine.machineReading.now(),
+      settings: () => keepSettingsFor(engine.keepProject),
+      now: () => Date.now(),
+      notice: (key, notice) => {
+        for (const one of engine.listeners) one.notice?.(key, notice)
+      },
+    }
+  }
+
+  /**
+   * Out of sight: its scripts stop (the debugger holds them: timers, animation frames and polling stop
+   * with them), its animations and media pause, and Chrome is told it is frozen where it honours that.
+   * Measured: a page frozen this way runs no script at all. It keeps the viewer's size meanwhile, so it
+   * is as it was left when it comes back.
+   */
+  private async freeze(page: Page): Promise<void> {
+    if (page.isClosed() || page === this.current || this.frozen.has(page) || !this.context) return
+    const session = await this.context.newCDPSession(page)
+    this.frozen.set(page, session)
+    const send = (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never).catch(() => {})
+    await send('Emulation.setDeviceMetricsOverride', { width: this.size.width, height: this.size.height, deviceScaleFactor: this.size.scale, mobile: false })
+    /* Media, CSS animations and transitions, and Web Animations pause in the page: a composited
+       animation keeps the GPU drawing frames for a page nobody sees, even with its scripts held. */
+    await send('Runtime.evaluate', { expression: FREEZE_IN_PAGE })
+    await send('Animation.enable')
+    await send('Animation.setPlaybackRate', { playbackRate: 0 })
+    /* Two frames, so the paused animations reach the compositor and every frame callback asked for has
+       been held, before the scripts are: held first, inside a frame, the compositor goes on working. */
+    await Promise.race([
+      send('Runtime.evaluate', { expression: FRAMES_IN_PAGE, awaitPromise: true }),
+      new Promise((r) => setTimeout(r, 500)),
+    ])
+    await send('Page.setWebLifecycleState', { state: 'frozen' })
+    await send('Debugger.enable')
+    await send('Debugger.pause')
+  }
+
+  private async thaw(page: Page): Promise<void> {
+    const session = this.frozen.get(page)
+    if (!session) return
+    this.frozen.delete(page)
+    const send = (method: string, params?: Record<string, unknown>) => session.send(method as never, params as never).catch(() => {})
+    await send('Debugger.resume')
+    await send('Debugger.disable')
+    await send('Page.setWebLifecycleState', { state: 'active' })
+    await send('Animation.setPlaybackRate', { playbackRate: 1 })
+    await send('Animation.disable')
+    await send('Runtime.evaluate', { expression: THAW_IN_PAGE })
+    /* Let go once the cast session holds the page's size: letting go now would reflow it first. */
+    this.handover.set(page, session)
+  }
+
+  /** Ask the site whether the page changed since it was loaded: its ETag, else its Last-Modified. */
+  private async revalidate(page: Page): Promise<Revalidated> {
+    const was = this.validators.get(page)
+    const url = page.url()
+    if (!was || (!was.etag && !was.lastModified) || !this.context || !/^https?:/.test(url)) return 'unknown'
+    const headers: Record<string, string> = {}
+    if (was.etag) headers['if-none-match'] = was.etag
+    if (was.lastModified) headers['if-modified-since'] = was.lastModified
+    try {
+      const response = await this.context.request.get(url, { headers, maxRedirects: 0, failOnStatusCode: false, timeout: 8000 })
+      const status = response.status()
+      const now = response.headers()
+      await response.dispose().catch(() => {})
+      if (status === 304) return 'same'
+      if (status >= 200 && status < 300) {
+        if (was.etag && now.etag) return now.etag === was.etag ? 'same' : 'changed'
+        if (was.lastModified && now['last-modified']) return now['last-modified'] === was.lastModified ? 'same' : 'changed'
+        return 'unknown'
+      }
+      return 'unknown'
+    } catch {
+      return 'offline'
+    }
+  }
 
   /** Open an address, after the one check that decides: http, https or about:blank. */
   async navigate(typed: string): Promise<PageState> {
