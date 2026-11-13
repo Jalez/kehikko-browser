@@ -53,20 +53,29 @@ describe('the doors', () => {
     expect(existsSync(join(project, '.kehikot', 'browser', 'saved.json'))).toBe(true)
   })
 
-  test('a place is recorded with the ticket, and restored from the most specific level', async () => {
-    const keys = ['epic:e/parts:a', 'epic:e', 'project']
-    const body = { projectPath: project, keys, url: 'https://example.org/a', title: 'A' }
+  test('a place is recorded with the ticket, restored there, and nowhere else', async () => {
+    const body = { projectPath: project, key: 'epic:e/parts:a', url: 'https://example.org/a', title: 'A' }
     expect((await answer('POST', '/api/place', none, body, null))?.status).toBe(403)
     expect((await answer('POST', '/api/place', none, body, TICKET))?.status).toBe(200)
-    const elsewhere = new URLSearchParams({ projectPath: project, keys: JSON.stringify(['epic:e/parts:b', 'epic:e', 'project']) })
-    const got = await answer('GET', '/api/place', elsewhere, null, null)
-    expect((got?.body as { visit: { url: string; key: string } }).visit).toMatchObject({ url: 'https://example.org/a', key: 'epic:e' })
+    const here = await answer('GET', '/api/place', new URLSearchParams({ projectPath: project, key: 'epic:e/parts:a' }), null, null)
+    expect((here?.body as { visit: { url: string; key: string } }).visit).toMatchObject({ url: 'https://example.org/a', key: 'epic:e/parts:a' })
+    for (const key of ['epic:e/parts:b', 'epic:e', 'project']) {
+      const got = await answer('GET', '/api/place', new URLSearchParams({ projectPath: project, key }), null, null)
+      expect((got?.body as { visit: unknown }).visit).toBeNull()
+    }
     expect(existsSync(join(project, '.kehikot', 'browser', 'places.json'))).toBe(true)
   })
 
+  test('the empty space is offered the pages used around it', async () => {
+    const got = await answer('GET', '/api/suggest', new URLSearchParams({ projectPath: project, key: 'epic:e/parts:b' }), null, null)
+    expect(got?.status).toBe(200)
+    expect((got?.body as { nearby: { url: string }[]; servers: unknown[] }).nearby.map((one) => one.url)).toEqual(['https://example.org/a'])
+    expect((await answer('GET', '/api/suggest', new URLSearchParams({ projectPath: project, key: '../x' }), null, null))?.status).toBe(400)
+  })
+
   test('a place is not written for keys it did not make, nor for an address it does not open', async () => {
-    expect((await answer('POST', '/api/place', none, { projectPath: project, keys: ['../x'], url: 'https://x.org/' }, TICKET))?.status).toBe(400)
-    expect((await answer('POST', '/api/place', none, { projectPath: project, keys: ['project'], url: 'file:///etc/hosts' }, TICKET))?.status).toBe(400)
+    expect((await answer('POST', '/api/place', none, { projectPath: project, key: '../x', url: 'https://x.org/' }, TICKET))?.status).toBe(400)
+    expect((await answer('POST', '/api/place', none, { projectPath: project, key: 'project', url: 'file:///etc/hosts' }, TICKET))?.status).toBe(400)
   })
 })
 

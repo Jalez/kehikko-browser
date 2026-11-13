@@ -1,5 +1,5 @@
 import { addSaved, readList, removeSaved, renameSaved, type Edit, type Saved } from './src/lib/saved.ts'
-import { isPlaceKey, recordAt, restoreFrom, type Places, type Visit } from './src/lib/places.ts'
+import { isPlaceKey, recordAt, restoreFrom, suggestionsFor, type Places, type Suggestions, type Visit } from './src/lib/places.ts'
 import { allowedUrl, BLANK } from './src/lib/address.ts'
 import { readData, writeData, type Result } from './store.ts'
 
@@ -48,29 +48,30 @@ function readPlaces(projectPath: string | null | undefined): Result<Places> {
   return { ok: true, value: places }
 }
 
-function goodKeys(keys: unknown): string[] | null {
-  if (!Array.isArray(keys) || keys.length === 0 || keys.length > 8) return null
-  return keys.every((key) => typeof key === 'string' && isPlaceKey(key)) ? (keys as string[]) : null
-}
-
-/** The address to show on arriving at a place, most specific level first. */
-export function placeFor(projectPath: string | null | undefined, keys: unknown): Result<(Visit & { key: string }) | null> {
-  const wanted = goodKeys(keys)
-  if (!wanted) return { ok: false, error: 'Those are not the keys of a place.' }
+/** The address kept at exactly this place, or null: never a broader place's or another space's. */
+export function placeFor(projectPath: string | null | undefined, key: unknown): Result<(Visit & { key: string }) | null> {
+  if (!isPlaceKey(key)) return { ok: false, error: 'That is not the key of a place.' }
+  const wanted = key
   const read = readPlaces(projectPath)
   return read.ok ? { ok: true, value: restoreFrom(read.value, wanted) } : read
 }
 
-/** Record the address shown at a place, at every level of it. `about:blank` is not worth remembering. */
-export function recordPlace(projectPath: string | null | undefined, keys: unknown, url: unknown, title: unknown): Result<null> {
-  const wanted = goodKeys(keys)
-  if (!wanted) return { ok: false, error: 'Those are not the keys of a place.' }
+/** Record the address shown at a place, at that place only. `about:blank` is not worth remembering. */
+export function recordPlace(projectPath: string | null | undefined, key: unknown, url: unknown, title: unknown): Result<null> {
+  if (!isPlaceKey(key)) return { ok: false, error: 'That is not the key of a place.' }
+  const wanted = key
   if (typeof url !== 'string' || !allowedUrl(url)) return { ok: false, error: 'Only an http or https address is remembered.' }
   if (url === BLANK) return { ok: true, value: null }
   const read = readPlaces(projectPath)
   if (!read.ok) return read
   const visit: Visit = { url, title: typeof title === 'string' ? title.slice(0, 200) : '', at: new Date().toISOString() }
-  const same = wanted.every((key) => read.value[key]?.url === url)
-  if (same) return { ok: true, value: null }
+  if (read.value[wanted]?.url === url) return { ok: true, value: null }
   return writeData(projectPath, 'places', recordAt(read.value, wanted, visit))
+}
+
+/** What a place with nothing shown offers: the pages used around it, and the project's recent ones. */
+export function suggestFor(projectPath: string | null | undefined, key: unknown): Result<Suggestions> {
+  if (!isPlaceKey(key)) return { ok: false, error: 'That is not the key of a place.' }
+  const read = readPlaces(projectPath)
+  return read.ok ? { ok: true, value: suggestionsFor(read.value, key) } : read
 }

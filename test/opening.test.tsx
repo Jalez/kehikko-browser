@@ -43,14 +43,15 @@ function fakeStream(connected = true) {
 const page = (url: string): PageState => ({ url, title: '', canBack: true, canForward: false, loading: false })
 const frame = { data: '', width: 1, height: 1 }
 
-function fakeApi(): Api {
+function fakeApi(remembered: string | null = null): Api {
   const none = () => Promise.resolve([])
   return {
     saved: none,
     save: () => Promise.resolve({ list: [] }),
     remove: none,
     rename: none,
-    place: () => Promise.resolve(null),
+    place: (_p: string, key: string) => Promise.resolve(remembered ? { url: remembered, title: '', at: '', key } : null),
+    suggest: () => Promise.resolve({ nearby: [], recent: [], servers: [] }),
     record: () => Promise.resolve(),
     followEndpoint: () => () => {},
     console: () => Promise.resolve({ entries: [], dropped: 0, last: 0 }),
@@ -237,9 +238,11 @@ describe('a pick', () => {
   test('Chrome’s own error page ends the load as a failure, and the person can put the cover away', async () => {
     const s = fakeStream()
     const { h } = host()
-    const { rerender } = render(<Browser host={h} api={fakeApi()} makeStream={s.make} />)
+    /* HOME is this place's own page, remembered here. */
+    const api = fakeApi(HOME)
+    const { rerender } = render(<Browser host={h} api={api} makeStream={s.make} />)
     act(() => s.events().page?.(page(HOME)))
-    await act(async () => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={fakeApi()} makeStream={s.make} />))
+    await act(async () => rerender(<Browser host={{ ...h, selection: ['!4013'] }} api={api} makeStream={s.make} />))
     act(() => s.events().page?.(page('chrome-error://chromewebdata/')))
     /* Its trailing sentence is the same failure, not a second one: the one retry still comes. */
     act(() => s.events().said?.(`Could not open ${MR}: net::ERR_CONNECTION_REFUSED`))

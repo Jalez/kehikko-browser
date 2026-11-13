@@ -77,9 +77,14 @@ address; nothing here is Kehikot-specific).
   address in `context.address`; Browser says `reacts: ['address']`, so the host
   knows it shows pages, and opens each address once (by its `at`, kept with
   `state.set`), says who handed it over, and offers "Save address".
-- **Remembers the address per place.** The address shown is recorded at every
-  level of project › epic › part › kehikko; arriving somewhere restores the
-  most specific level that has one.
+- **Remembers the address per place.** A place is the space you stand in
+  (`context.space`, or an older host's epic and picked parts, which name the
+  same place) on one kehikko. Each place keeps its own address; arriving
+  restores it. A place where nothing was shown shows the empty space — never
+  the page of the place before — offering the pages used in the spaces around
+  it, the project's running dev servers (only the ports the project names in
+  its scripts and config, asked on loopback) and its recent pages, with the
+  address field.
 - **Saved addresses**, per project, in the Go menu; Run › Save this address;
   Run › Edit saved addresses… to rename and remove.
 

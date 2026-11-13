@@ -13,7 +13,8 @@ import { addressToOpen, handedSaid, type Handed } from '@/lib/handed'
 import { FOOT, footerItems } from '@/lib/footer'
 import { LOADING_AT_MOST, LOADING_GRACE_MS, SHOW_ANYWAY, covering, failedPage, troubleOf, type Trouble } from '@/lib/loading'
 import { addressShown, alreadyOpening, alreadyShown, committed, failureFor, hostLoadingWords, painted, pickedOpening, startOpening, type Opening } from '@/lib/opening'
-import { placeKeys } from '@/lib/places'
+import { placeKey } from '@/lib/places'
+import { EmptySpace } from '@/view/empty'
 import type { Saved } from '@/lib/saved'
 import { ConsoleView, RunsView, ShotsView, VIEWS, appendEntry, type View } from '@/view/panels'
 import { Viewer } from '@/view/viewer'
@@ -169,6 +170,14 @@ export function Browser({
   const resend = useRef<(again: Opening) => void>(() => {})
   /* A navigation asked while the socket was down: sent when it is up again, if it is still what is being opened. */
   const parked = useRef<string | null>(null)
+  /* This place, while its memory is read after a move (`reading`: what the last place showed is covered)
+     or once it said nothing was shown here (`empty`: the empty space). Null otherwise. */
+  const [here, setHereState] = useState<{ id: string; state: 'reading' | 'empty' } | null>(null)
+  const hereRef = useRef<{ id: string; state: 'reading' | 'empty' } | null>(null)
+  const setHere = useCallback((next: { id: string; state: 'reading' | 'empty' } | null) => {
+    hereRef.current = next
+    setHereState(next)
+  }, [])
 
   /**
    * A load failed. A pick or a hand-over — the page the person is pointing at — is asked once more
@@ -204,6 +213,8 @@ export function Browser({
           const was = pageRef.current
           pageRef.current = state
           setPage(state)
+          /* A page came up where none was (an agent's navigation, a link from the empty space): it is what is shown here now. */
+          if (/^https?:/.test(state.url) && !/^https?:/.test(was.url) && hereRef.current) setHere(null)
           /* A new load starts: whatever went wrong with the last one is behind it. */
           if (state.loading && !was.loading) {
             if (troubleRef.current?.kind === 'failed') setTrouble(null)
@@ -337,11 +348,12 @@ export function Browser({
       setSaid(null)
       setTrouble(null)
       setPutAway(false)
+      if (address.url !== BLANK) setHere(null)
       setOpening(startOpening(openingRef.current, { url: address.url, label: how.label ?? null, title: how.title ?? null, from, before: pageRef.current.url }))
       parked.current = stream.send({ t: 'go', url: address.url }) === false ? address.url : null
       return true
     },
-    [setOpening, setTrouble, stream],
+    [setHere, setOpening, setTrouble, stream],
   )
   resend.current = (again) => {
     setOpening(startOpening(null, { url: again.url!, label: again.label, title: again.title ?? null, from: again.from, before: pageRef.current.url }))
@@ -495,39 +507,71 @@ export function Browser({
   }, [follow])
 
   /* ---------------- The address remembered per place. ---------------- */
+  /* A place is the space (2.89.0, `context.space`; from an older host its epic and picked parts, the same
+     place) on this kehikko. Each holds its own address; a place that holds none shows the empty space,
+     never the page of the place before it. */
   const pickedIds = pickedParts(host.parts).map((part) => part.id)
-  const keys = useMemo(
-    () => placeKeys({ epic: host.epic, parts: pickedIds, kehikko: host.kehikko?.key ?? null }),
+  const spaceIds = (host.space?.path ?? []).map((step) => step.id)
+  const spacePicked = host.space?.picked ?? []
+  const key = useMemo(
+    () =>
+      placeKey({
+        epic: host.epic,
+        parts: pickedIds,
+        space: spaceIds.length ? { ids: spaceIds, picked: spacePicked } : null,
+        kehikko: host.kehikko?.key ?? null,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [host.epic, pickedIds.join(','), host.kehikko?.key],
+    [host.epic, pickedIds.join(','), spaceIds.join('.'), spacePicked.join(','), host.kehikko?.key],
   )
-  const placeId = projectPath ? `${projectPath}::${keys[0]}` : null
+  const placeId = projectPath ? `${projectPath}::${key}` : null
   const arrived = useRef<string | null>(null)
   /* How many picks and hand-overs had opened when this place was arrived at. Counted on arrival, not
      when the socket comes up: a pick made since arriving is what the person points at, and a socket that
      reconnects (or a memory read late) must not put the place's older address over it. */
   const placeSeen = useRef<string | null>(null)
   const openedOnArrival = useRef(0)
+  /* Moved from another place (not the first arrival): what was shown there is covered at once, until
+     this place's memory says what belongs here. */
+  const movedHere = useRef(false)
   if (placeSeen.current !== placeId) {
+    movedHere.current = placeSeen.current !== null
     placeSeen.current = placeId
     openedOnArrival.current = opened.current
   }
 
   useEffect(() => {
+    if (!placeId || host.where !== 'hosted') return
+    if (movedHere.current) setHere({ id: placeId, state: 'reading' })
+    movedHere.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placeId, host.where])
+
+  useEffect(() => {
     if (!placeId || !projectPath || !connected || host.where !== 'hosted') return
     let live = true
     arrived.current = null
-    api
-      .place(projectPath, keys)
-      .then((visit) => {
-        if (!live) return
-        /* A pick or a handed-over address opened since arriving is what was asked for now: the place's memory does not replace it. */
-        if (visit && visit.url !== pageRef.current.url && opened.current === openedOnArrival.current && openingRef.current?.from !== 'pick') go(visit.url)
-        arrived.current = placeId
-      })
-      .catch(() => {
-        if (live) arrived.current = placeId
-      })
+    const settle = (visit: { url: string } | null) => {
+      if (!live) return
+      arrived.current = placeId
+      /* A pick or a handed-over address opened since arriving is what was asked for now: the place's memory does not replace it. */
+      const askedSince = opened.current !== openedOnArrival.current || openingRef.current?.from === 'pick'
+      if (askedSince) return setHere(null)
+      if (visit) {
+        setHere(null)
+        if (visit.url !== pageRef.current.url) go(visit.url)
+        return
+      }
+      /* Nothing was shown here: the empty space, and the page of wherever the person was is let go. */
+      setHere({ id: placeId, state: 'empty' })
+      if (pageRef.current.url !== BLANK) stream.send({ t: 'go', url: BLANK })
+    }
+    api.place(projectPath, key).then(settle, () => {
+      /* Memory unreadable: whatever is up stays, uncovered, rather than a blank that hides it. */
+      if (!live) return
+      arrived.current = placeId
+      setHere(null)
+    })
     return () => {
       live = false
     }
@@ -535,11 +579,11 @@ export function Browser({
   }, [placeId, connected, host.where])
 
   useEffect(() => {
-    if (!projectPath || !placeId || arrived.current !== placeId) return
+    if (!projectPath || !placeId || arrived.current !== placeId || hereRef.current?.id === placeId) return
     if (!/^https?:/.test(page.url)) return
-    const timer = setTimeout(() => void api.record(projectPath, keys, page.url, page.title).catch(() => {}), 1200)
+    const timer = setTimeout(() => void api.record(projectPath, key, page.url, page.title).catch(() => {}), 1200)
     return () => clearTimeout(timer)
-  }, [api, keys, page.title, page.url, placeId, projectPath])
+  }, [api, key, page.title, page.url, placeId, projectPath, here])
 
   /* ---------------- An address handed to the canvas (protocol 2.16.0). ---------------- */
   /* Opened once per `at`: the host stamps a new one on every hand-over, and the last one acted on is
@@ -695,6 +739,13 @@ export function Browser({
   }, [stream, visible])
 
   const cover = putAway ? null : covering({ opening, loadingShown, trouble, pageUrl: page.url })
+  /* The empty space: this place said nothing is shown here, or no page is up at all, and nothing is on its way. */
+  const placeHere = here && here.id === placeId ? here.state : null
+  const noPage = !/^https?:/.test(page.url) && !failedPage(page.url)
+  const settled = status.state === 'ready' && !opening && !trouble && !page.loading && host.where !== 'listening'
+  const emptyShown = settled && placeHere !== 'reading' && (placeHere === 'empty' || noPage)
+  /* Moved here and still reading what belongs: the last place's page is not left showing meanwhile. */
+  const readingShown = placeHere === 'reading' && !opening
 
   if (server === 'stale') return <Cover state="stale" name="Browser" onRetry={() => location.reload()} />
 
@@ -739,6 +790,8 @@ export function Browser({
       ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <Viewer stream={stream} frames={frames} onCopied={copied} />
+        {readingShown ? <div className="bg-background absolute inset-0" data-testid="reading-place" /> : null}
+        {emptyShown ? <EmptySpace api={api} projectPath={projectPath} placeKey={key} onOpen={(url) => go(url)} /> : null}
         {cover && status.state === 'ready' ? (
           <LoadingCover
             cover={cover}

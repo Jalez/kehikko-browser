@@ -52,15 +52,31 @@ export function preferredCdpPort(modulePort: number, env: Env = process.env): nu
   return Number.isInteger(said) && said > 1024 && said < 65536 ? said : modulePort + 5
 }
 
-function free(port: number): Promise<boolean> {
+/**
+ * Every address a port can be held on. A port another program holds on `[::]` or `0.0.0.0` looked free
+ * to a probe of 127.0.0.1 alone, and Chrome then failed to open its DevTools endpoint there.
+ */
+export const PROBED = ['127.0.0.1', '::1', '0.0.0.0', '::'] as const
+
+/** Errors that say the machine has no such address (no IPv6), which is not the port being held. */
+const ABSENT = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EPROTONOSUPPORT'])
+
+function freeOn(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const probe = createServer()
-    probe.once('error', () => resolve(false))
-    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)))
+    probe.once('error', (error: NodeJS.ErrnoException) => resolve(ABSENT.has(error.code ?? '')))
+    /* `ipv6Only`, so `::` asks about IPv6 alone; `0.0.0.0` asks about IPv4. */
+    probe.listen({ port, host, exclusive: true, ...(host.includes(':') ? { ipv6Only: true } : {}) }, () => probe.close(() => resolve(true)))
   })
 }
 
-async function freePortFrom(port: number): Promise<number> {
+/** Whether nothing holds `port` on any address of this machine (skipping addresses it lacks). */
+export async function portFree(port: number, hosts: readonly string[] = PROBED): Promise<boolean> {
+  for (const host of hosts) if (!(await freeOn(port, host))) return false
+  return true
+}
+
+export async function freePortFrom(port: number, free: (port: number) => Promise<boolean> = portFree): Promise<number> {
   for (let p = port; p < port + 50; p += 1) if (await free(p)) return p
   throw new Error(`No free port for the DevTools endpoint between ${port} and ${port + 49}.`)
 }
