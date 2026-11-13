@@ -32,7 +32,12 @@ function fakeStream() {
         events.status?.({ state: 'ready', why: null, endpoint: null })
       },
       stop: () => {},
-      send: (m: Record<string, unknown>) => sent.push(m),
+      send: (m: Record<string, unknown>) => {
+        sent.push(m)
+        /* The engine answers a place with a new blank page of its own: nothing kept (keep.ts). */
+        if (m.t === 'place') queueMicrotask(() => events.placed?.({ key: String(m.key), kept: false, asIs: false }))
+        return true
+      },
       resize: () => {},
       shown: (on: boolean) => shown.push(on),
     } as unknown as Stream
@@ -198,7 +203,7 @@ describe('the page', () => {
     render(<Browser host={h} api={fakeApi()} makeStream={s.make} pressRef={pressRef} />)
     act(() => s.events().page?.(state({ canForward: true })))
     for (const item of [FOOT.BACK, FOOT.FORWARD, FOOT.RELOAD]) expect(pressRef.current({ item })).toBeUndefined()
-    expect(s.sent).toEqual([{ t: 'back' }, { t: 'forward' }, { t: 'reload' }])
+    expect(s.sent.filter((m) => m.t !== 'place')).toEqual([{ t: 'back' }, { t: 'forward' }, { t: 'reload' }])
     act(() => s.events().page?.(state({ loading: true })))
     await waitFor(() => expect(last().some((one) => one.id === FOOT.STOP)).toBe(true))
     expect(pressRef.current({ item: FOOT.STOP })).toBeUndefined()

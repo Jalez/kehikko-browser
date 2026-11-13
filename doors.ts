@@ -1,6 +1,7 @@
 import { dirname } from 'node:path'
 
 import { KEHIKOT_DIR, manifestSchema, type Manifest } from 'kehikot-module-protocol'
+import { settingsDoor } from 'kehikot-module-protocol/serve'
 import { establishBuild, mintTicket, refuseTicket, type Reply } from 'kehikot-module-protocol/serve'
 
 import { ENGINE } from './browser/index.ts'
@@ -8,6 +9,8 @@ import { endpointNews, endpointStream } from './live.ts'
 import { describeEntries, KINDS, LEVELS, type Kind, type Level } from './browser/console.ts'
 import type { Engine } from './browser/engine.ts'
 import { runningDevServers } from './devservers.ts'
+import { FIELDS, SETTINGS_FILE } from './settings-fields.ts'
+import { readValues, suggestsIn, writeValue } from './settings.ts'
 import { editSaved, placeFor, recordPlace, savedList, suggestFor, type SavedOp } from './data.ts'
 import { DECLARED, ID, VERSION } from './manifest.ts'
 import { resolveProject } from './project.ts'
@@ -792,6 +795,18 @@ async function mcp(rpc: Rpc, engine: Engine): Promise<Reply> {
  * The doors.
  * ------------------------------------------------------------------ */
 
+/* The host's settings form for Browser (`settings.get`, `settings.set`); the page's own ticket is the person's. */
+const SETTINGS = settingsDoor({
+  module: ID,
+  fields: FIELDS,
+  ticket: TICKET,
+  read: (project) => {
+    const read = readValues(project)
+    return { values: read.values, file: SETTINGS_FILE, ...(read.problem ? { problem: read.problem } : {}) }
+  },
+  write: (project, key, value) => writeValue(project, key, value),
+})
+
 export async function answer(
   method: string,
   path: string,
@@ -800,6 +815,9 @@ export async function answer(
   ticket: string | null,
   engine: Engine = ENGINE,
 ): Promise<Reply | null> {
+  const set = await SETTINGS(method, path, query, body, ticket)
+  if (set) return set
+
   if (path === '/healthz') {
     return ok({ ok: true, id: ID, version: VERSION, browser: engine.getStatus().state, where: `<project>/${KEHIKOT_DIR}/browser/` })
   }
@@ -937,6 +955,7 @@ export async function answer(
     if (!at.ok) return bad(at.error)
     const read = suggestFor(at.path, query.get('key'))
     if (!read.ok) return bad(read.error)
+    if (!suggestsIn(at.path)) return ok({ ok: true, nearby: [], recent: [], servers: [], off: true })
     const cdp = engine.endpoint()?.port
     const servers = await runningDevServers(at.path, cdp ? [cdp] : []).catch(() => [])
     return ok({ ok: true, ...read.value, servers })
