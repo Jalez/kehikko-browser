@@ -48,7 +48,7 @@ export const DECLARED: Manifest = manifestSchema.parse({
   entry: '/app',
   /* What its content belongs to (protocol 2.29.0): one mode per scope, the default first. */
   modes: [
-    { id: 'browser', label: 'Browser', scope: 'part', scopeSays: 'the page you last had open for the picked parts of the open epic, on this kehikko' },
+    { id: 'browser', label: 'Browser', scope: 'part', scopeSays: 'the page you last had open in this space, on this kehikko' },
   ],
   mcp: {
     url: '/mcp',

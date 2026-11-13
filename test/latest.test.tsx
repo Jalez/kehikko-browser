@@ -58,6 +58,7 @@ function fakeApi(over: Partial<Api> = {}): Api {
     remove: none,
     rename: none,
     place: () => Promise.resolve(null),
+    suggest: () => Promise.resolve({ nearby: [], recent: [], servers: [] }),
     record: () => Promise.resolve(),
     followEndpoint: () => () => {},
     console: () => Promise.resolve({ entries: [], dropped: 0, last: 0 }),
@@ -194,7 +195,8 @@ describe('a load that fails', () => {
   test('the retry that loads ends the cover as any load does', async () => {
     const s = fakeStream()
     const { h } = host()
-    const { pick } = mount(h, s)
+    /* HOME is this place's own page, remembered here. */
+    const { pick } = mount(h, s, fakeApi({ place: (_p, key) => Promise.resolve({ url: HOME, title: '', at: '', key }) }))
     act(() => s.events().page?.(page(HOME)))
     await pick(['gh#1'])
     act(() => s.events().page?.(page('chrome-error://chromewebdata/')))

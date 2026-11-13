@@ -33,10 +33,16 @@ export interface Host
     Partial<Pick<ProtocolHost<Kept>, 'footer' | 'drawsFooter' | 'visible' | 'footerKinds' | 'ready' | 'loading'>> {
   /** When the host's tracker reading last changed (`context.tracker.at`); a pending ref is asked again when it moves. */
   trackerAt: string | null
+  /**
+   * 2.89.0. The space the person stands in (`context.space`), or null on "All spaces" and from an older
+   * host, which says only `epic` and `parts`. Optional, so a screen renders in a test without it.
+   */
+  space?: { path: readonly { id: string }[]; picked?: readonly string[] } | null
 }
 
 export function useKehikot(events: HostEvents = {}): Host {
   const host = useHost<Kept>(ID, events)
   const trackerAt = host.context?.tracker?.at ?? null
-  return useMemo(() => ({ ...host, trackerAt }), [host, trackerAt])
+  const space = host.context?.space ?? null
+  return useMemo(() => ({ ...host, trackerAt, space }), [host, trackerAt, space])
 }

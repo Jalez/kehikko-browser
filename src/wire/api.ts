@@ -1,7 +1,7 @@
 import { answered, ask, subscribe } from 'kehikot-module-protocol/client'
 
 import type { Snippets } from '@/lib/endpoint'
-import type { Visit } from '@/lib/places'
+import type { Suggestions, Visit } from '@/lib/places'
 import type { Saved } from '@/lib/saved'
 import type { Run, RunKind } from '@/lib/runs'
 import type { Pair, ShotSet } from '@/lib/shots'
@@ -16,13 +16,21 @@ export interface Endpoint {
   snippets: Snippets | null
 }
 
+/** What the empty space offers (`/api/suggest`). */
+export interface Offered extends Suggestions {
+  /** The project's own dev servers that answer now, from the ports it names (devservers.ts). */
+  servers: { url: string; from: string }[]
+}
+
 export interface Api {
   saved(projectPath: string): Promise<Saved[]>
   save(projectPath: string, entry: { url: string; title?: string | null; name?: string | null }): Promise<{ list: Saved[]; saved?: Saved }>
   remove(projectPath: string, id: string): Promise<Saved[]>
   rename(projectPath: string, id: string, name: string): Promise<Saved[]>
-  place(projectPath: string, keys: string[]): Promise<(Visit & { key: string }) | null>
-  record(projectPath: string, keys: string[], url: string, title: string): Promise<void>
+  place(projectPath: string, key: string): Promise<(Visit & { key: string }) | null>
+  record(projectPath: string, key: string, url: string, title: string): Promise<void>
+  /** What a place with nothing shown offers: pages used around it, the project's recent ones, and its running dev servers. */
+  suggest(projectPath: string, key: string): Promise<Offered>
   /**
    * Hear the Playwright endpoint: as it stands when the stream opens (and each time it reopens, after
    * a drop or when the page is shown again), then each time the browser starts or stops. Never on a
@@ -70,14 +78,18 @@ export const api: Api = {
   async rename(projectPath, id, name) {
     return answered(await ask<{ list?: Saved[] }>('./api/saved', { body: { projectPath, op: 'rename', id, name } })).list ?? []
   },
-  async place(projectPath, keys) {
+  async place(projectPath, key) {
     return (
-      answered(await ask<{ visit?: (Visit & { key: string }) | null }>('./api/place', { query: { projectPath, keys: JSON.stringify(keys) } })).visit
+      answered(await ask<{ visit?: (Visit & { key: string }) | null }>('./api/place', { query: { projectPath, key } })).visit
       ?? null
     )
   },
-  async record(projectPath, keys, url, title) {
-    answered(await ask('./api/place', { body: { projectPath, keys, url, title } }))
+  async suggest(projectPath, key) {
+    const got = answered(await ask<Partial<Offered>>('./api/suggest', { query: { projectPath, key } }))
+    return { nearby: got.nearby ?? [], recent: got.recent ?? [], servers: got.servers ?? [] }
+  },
+  async record(projectPath, key, url, title) {
+    answered(await ask('./api/place', { body: { projectPath, key, url, title } }))
   },
   followEndpoint: (onEndpoint) =>
     subscribe<Partial<Endpoint>>('./api/endpoint/events', (got) => onEndpoint({ endpoint: got.endpoint ?? null, snippets: got.snippets ?? null }), { probe: true }),

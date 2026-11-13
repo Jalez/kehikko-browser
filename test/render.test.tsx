@@ -37,6 +37,7 @@ function fakeApi(over: Partial<Api> = {}): Api & { recorded: unknown[] } {
     remove: () => Promise.resolve([]),
     rename: () => Promise.resolve(saved),
     place: () => Promise.resolve(null),
+    suggest: () => Promise.resolve({ nearby: [], recent: [], servers: [] }),
     record: (...args) => {
       recorded.push(args)
       return Promise.resolve()
@@ -147,16 +148,16 @@ describe('the page', () => {
 
   test('arriving at a place restores the address remembered there', async () => {
     const s = fakeStream()
-    const asked: string[][] = []
+    const asked: string[] = []
     const api = fakeApi({
-      place: (_p, keys) => {
-        asked.push(keys)
-        return Promise.resolve({ url: 'https://example.org/remembered', title: '', at: '', key: keys[1]! })
+      place: (_p, key) => {
+        asked.push(key)
+        return Promise.resolve({ url: 'https://example.org/remembered', title: '', at: '', key })
       },
     })
     render(<Browser host={host({ parts: [{ id: 'p1', heading: 'One', refs: [], picked: true }] })} api={api} makeStream={s.make} />)
     await waitFor(() => expect(s.sent).toContainEqual({ t: 'go', url: 'https://example.org/remembered' }))
-    expect(asked[0]).toEqual(['epic:browser/parts:p1/kehikko:main', 'epic:browser/parts:p1', 'epic:browser', 'project'])
+    expect(asked[0]).toBe('epic:browser/parts:p1/kehikko:main')
   })
 
   test('a page shown after arrival is recorded at the place', async () => {
@@ -166,7 +167,7 @@ describe('the page', () => {
     await new Promise((r) => setTimeout(r, 10))
     act(() => s.events().page?.({ url: 'https://github.com/x', title: 'X', canBack: false, canForward: false, loading: false }))
     await waitFor(() => expect(api.recorded.length).toBe(1), { timeout: 3000 })
-    expect(api.recorded[0]).toEqual(['/work/kehikko', ['epic:browser/kehikko:main', 'epic:browser', 'project'], 'https://github.com/x', 'X'])
+    expect(api.recorded[0]).toEqual(['/work/kehikko', 'epic:browser/kehikko:main', 'https://github.com/x', 'X'])
   })
 
   test('an address handed to the canvas opens once, says who asked, and can be saved', async () => {

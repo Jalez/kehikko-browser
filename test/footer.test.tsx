@@ -48,6 +48,7 @@ function fakeApi(): Api {
     remove: none,
     rename: none,
     place: () => Promise.resolve(null),
+    suggest: () => Promise.resolve({ nearby: [], recent: [], servers: [] }),
     record: () => Promise.resolve(),
     followEndpoint: () => () => {},
     console: () => Promise.resolve({ entries: [], dropped: 0, last: 0 }),

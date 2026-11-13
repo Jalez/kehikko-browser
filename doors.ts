@@ -7,7 +7,8 @@ import { ENGINE } from './browser/index.ts'
 import { endpointNews, endpointStream } from './live.ts'
 import { describeEntries, KINDS, LEVELS, type Kind, type Level } from './browser/console.ts'
 import type { Engine } from './browser/engine.ts'
-import { editSaved, placeFor, recordPlace, savedList, type SavedOp } from './data.ts'
+import { runningDevServers } from './devservers.ts'
+import { editSaved, placeFor, recordPlace, savedList, suggestFor, type SavedOp } from './data.ts'
 import { DECLARED, ID, VERSION } from './manifest.ts'
 import { resolveProject } from './project.ts'
 import { readRecordPng } from './records.ts'
@@ -924,16 +925,21 @@ export async function answer(
   }
 
   if (path === '/api/place' && method === 'GET') {
-    let keys: unknown = null
-    try {
-      keys = JSON.parse(query.get('keys') ?? 'null')
-    } catch {
-      return bad('keys is a JSON list')
-    }
     const at = await resolveProject(query.get('projectPath'))
     if (!at.ok) return bad(at.error)
-    const read = placeFor(at.path, keys)
+    const read = placeFor(at.path, query.get('key'))
     return read.ok ? ok({ ok: true, visit: read.value }) : bad(read.error)
+  }
+
+  /* The empty space: what to offer where nothing is shown. Read-only; the dev servers are only the ports the project names. */
+  if (path === '/api/suggest' && method === 'GET') {
+    const at = await resolveProject(query.get('projectPath'))
+    if (!at.ok) return bad(at.error)
+    const read = suggestFor(at.path, query.get('key'))
+    if (!read.ok) return bad(read.error)
+    const cdp = engine.endpoint()?.port
+    const servers = await runningDevServers(at.path, cdp ? [cdp] : []).catch(() => [])
+    return ok({ ok: true, ...read.value, servers })
   }
 
   if (path === '/api/place' && method === 'POST') {
@@ -942,7 +948,7 @@ export async function answer(
     if (!body) return bad('that was not a request')
     const at = await resolveProject(typeof body.projectPath === 'string' ? body.projectPath : null)
     if (!at.ok) return bad(at.error)
-    const written = recordPlace(at.path, body.keys, body.url, body.title)
+    const written = recordPlace(at.path, body.key, body.url, body.title)
     return written.ok ? ok({ ok: true }) : bad(written.error)
   }
 
