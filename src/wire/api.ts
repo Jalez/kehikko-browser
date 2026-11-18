@@ -58,10 +58,10 @@ export interface ShotSummary {
 
 /** A picture a record keeps, as the page loads it (a plain GET of this module's own origin). */
 export function runPng(projectPath: string, kind: RunKind, id: string, file: string): string {
-  return `./api/run/png?${new URLSearchParams({ projectPath, kind, id, file })}`
+  return `/api/run/png?${new URLSearchParams({ projectPath, kind, id, file })}`
 }
 export function shotPng(projectPath: string, ref: string, file: string): string {
-  return `./api/shots/png?${new URLSearchParams({ projectPath, ref, file })}`
+  return `/api/shots/png?${new URLSearchParams({ projectPath, ref, file })}`
 }
 
 export const api: Api = {
